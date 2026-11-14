@@ -1,6 +1,6 @@
 ---
 name: mars-mvp-data
-description: Project context, requirements and exact datasets for the Mars astronaut-map MVP: a hyper-local, 4-layer map. It shows base imagery, relief/walkability and points of interest for East Melas Chasma, plus a seasonal dust-storm risk layer on a 1° grid over the wider Valles Marineris area. Use it whenever building, extending or debugging any part of this project: fetching NASA Trek tiles or vectors, computing slopes, querying MDAD storm data, or showing risk and confidence labels. Bundles the working Python scripts (scripts/01-08) as a reference implementation.
+description: Project context, requirements and exact datasets for the Mars astronaut-map MVP: a hyper-local, 4-layer map. It shows base imagery, relief/walkability and points of interest for East Melas Chasma, plus a seasonal dust-storm risk layer on a 1° grid over the wider Valles Marineris area. Use it whenever building, extending or debugging any part of this project: fetching NASA Trek tiles or vectors, computing slopes, querying MDAD storm data, showing risk and confidence labels, or building the multi-destination route planner (rustworkx graph + Google OR-Tools, per-profile edge weights for astronaut and car). Bundles the working Python scripts (scripts/01-08) as a reference implementation.
 ---
 
 # Mars MVP: data skill
@@ -203,6 +203,7 @@ requirements.txt                   venv packages (requests, pandas, numpy, pillo
 
 ## 8. Open questions / next steps
 - Confirm slope thresholds for walking vs vehicles with the product owner.
+- Confirm the per-profile edge-weight formulas (astronaut, car) and their inputs (slope, distance, roughness, energy, oxygen). See section 10.
 - Is the 200 m DEM enough for the demo, or should we pull the 24 m CTX DTMs from PDS for a sub-area?
 - ~~Weather display scale~~: **decided, use the Valles Marineris 1° grid** (section 5, Layer 4).
 
@@ -237,11 +238,11 @@ requirements.txt                   venv packages (requests, pandas, numpy, pillo
 - **Single source of truth for relief.** The slope overlay shown to users and the slope used by the router must come from the same array.
 
 ### Backend (FastAPI)
-- Four independent layer endpoints (base imagery, relief, points of interest, weather) plus one route endpoint. Planned: `POST /route` with start, end, mode (`walker` | `vehicle`) and season; it returns a polyline, stats and warnings (including the `message` of any `approximate` or `insufficient_data` frame the route crosses).
+- Four independent layer endpoints (base imagery, relief, points of interest, weather) plus one route endpoint: `POST /api/route`, a **multi-destination** route for a profile (`astronaut` | `car`; replaces the earlier `walker` | `vehicle` naming). Full spec in section 10.
 - **Layer getter module** (`backend/app/layers/<layer>/`): one getter per layer with a common interface (for example `sample(lon, lat)` and `cells(bbox)`). Elevation and slope come from the DEM array held in memory, points of interest from a spatial index, weather from a season lookup. Imagery is tile-serving only; the graph does not use it.
-- **Master graph** (`backend/app/graph/`): nodes carry elevation, slope class, nearby points of interest, and the four seasonal risk values with their confidence. **Season is a query parameter, not part of the graph.** Use an implicit grid held in numpy arrays and A*, not a `networkx` object. Native DEM is 200 m (~1.3M nodes over the AOI); start coarsened to ~400 m (~330k nodes), configurable. Persist the built graph under `data/graph/` (gitignored).
-- **Routing engine** (`backend/app/routing/`): cost models per mode. Slope classes (0-5 easy, 5-15 walkable, 15-25 vehicle only, 25-35 hard/vehicle limit, >35 impassable) are unconfirmed by the product owner, so keep them configurable.
-- **Caveats for routing:** weather risk is almost uniform inside the AOI (1 deg cells within +-10 %), so it acts as a season-wide penalty or warning, not a route discriminator. The 200 m DEM underestimates local slope.
+- **Master graph** (`backend/app/graph/`): a **rustworkx `PyDiGraph`** built offline from the layer getters, with one precomputed weight per profile on every directed edge. Nodes carry elevation, slope, nearby points of interest, and the four seasonal risk values with their confidence. **Season is a query parameter, not part of the graph or the edge weights.** Native DEM is 200 m (~1.3M nodes over the AOI); start coarsened to ~400 m (~330k nodes, ~2.6M directed edges with 8 neighbours), configurable. Persist the built graph under `data/graph/` (gitignored). (This supersedes the earlier "implicit numpy grid + A*" decision.)
+- **Routing engine** (`backend/app/routing/`): per-profile cost formulas, the rustworkx cost matrix and the OR-Tools solver. Slope classes (0-5 easy, 5-15 walkable, 15-25 vehicle only, 25-35 hard/vehicle limit, >35 impassable) are unconfirmed by the product owner, so keep them configurable.
+- **Caveats for routing:** weather risk is almost uniform inside the AOI (1 deg cells within +-10 %), so it acts as a season-wide warning, not a route discriminator. The 200 m DEM underestimates local slope.
 - **Tiles** (`backend/app/tiles/`): serve `data/raw/tiles/<label>/<z>/<row>/<col>.<ext>` straight from disk (static files). No upstream fetching; a missing tile returns 404 or a transparent tile.
 
 ### Frontend (React + Vite + Leaflet)
@@ -268,8 +269,8 @@ backend/
   app/schemas/                  client-facing response models
   app/layers/{base_imagery,relief,poi,weather}/   layer getters
   app/tiles/                    serves tiles from data/raw/tiles (static, no upstream calls)
-  app/graph/                    master graph builder/loader
-  app/routing/                  routing engine, cost models
+  app/graph/                    master graph builder (offline) and loader (startup), see section 10
+  app/routing/                  profiles + weight formulas, cost matrix (rustworkx), solver (OR-Tools), route assembly
   tests/
 frontend/src/
   api/                          the only place that talks to the backend
@@ -278,3 +279,132 @@ frontend/src/
   hooks/, config/, utils/
 ```
 The new folders are empty (`.gitkeep`); no application code exists yet beyond the starters.
+
+## 10. Multi-destination routing (decided: rustworkx + Google OR-Tools)
+A user picks a profile, a start, several destinations and optionally an end. The backend returns one continuous path that visits the reachable destinations in the best order it finds, and reports the ones it had to drop.
+- **rustworkx** computes shortest paths on the terrain graph.
+- **OR-Tools** (`ortools.constraint_solver`) orders the stops.
+- Backend deps: `rustworkx`, `ortools`, plus `numpy` and `scipy` (KD-tree). Checked with rustworkx 0.18.1 and ortools 9.15.
+
+### Profiles
+| Profile | Who | Hard limit (from the slope classes, configurable) |
+|---|---|---|
+| `astronaut` | walking EVA crew | slope > 15° → ∞ |
+| `car` | rover / vehicle | slope > 35° → ∞ |
+
+- Each profile has **its own weight formula**, which combines every relevant parameter: 3D distance, signed slope (uphill ≠ downhill), roughness, energy, oxygen (astronaut) and so on.
+- The formulas are **not confirmed by the product owner**. Keep them in one place (`app/routing/profiles.py`) with their constants in config, and record a `formula_version` in the saved graph.
+- Weights are an abstract cost, not metres. If a profile also needs a readable figure (time, Wh, O₂ kg), compute it per leg separately.
+- Slope must come from the same array as the relief layer (section 9).
+
+### Step 1: graph construction (offline, once): `app/graph/build.py`
+- **Nodes:** terrain points of the (coarsened) DEM grid. Use `node index = row * ncols + col` and add every cell in order, so the grid ↔ node mapping is plain arithmetic. Nodata cells become nodes with no edges.
+- **Edges:** **directed**, one per ordered pair of neighbours (8-neighbourhood), because uphill and downhill cost differently. A→B and B→A are separate edges with separate weights.
+- **One final weight per profile on every edge.** Compute all profiles with vectorised numpy over edge arrays, not one Python loop per edge.
+- **Impassable = `math.inf`.** If a profile can't use an edge, its weight is ∞. **Every edge has a weight for every profile;** an edge is never left out for one profile, so all profiles share the same topology.
+- **Weights must be ≥ 0 and never NaN.** rustworkx rejects negative or NaN weights. A downhill bonus must still leave a weight ≥ 0.
+- **Persist** to `data/graph/` (gitignored) as `graph.npz`:
+  - node arrays: `lon`, `lat`, `elev`, `valid`
+  - edge arrays: `src`, `dst`, `w_astronaut`, `w_car`
+  - metadata: grid shape, resolution, DEM file hash, `formula_version`
+- The loader rebuilds only when the metadata no longer matches. It is not rebuilt on every start.
+
+### Step 2: startup: `app/graph/loader.py` (FastAPI lifespan)
+- Load `graph.npz` once and build the `PyDiGraph`: `g.add_nodes_from(range(n))`, then `g.add_edges_from(zip(src, dst, range(m)))`. The **edge payload is the edge id**.
+- Keep the per-profile weights as Python lists indexed by edge id: `weights = {"astronaut": w_a.tolist(), "car": w_c.tolist()}`. Indexing a list from the Python `weight_fn` callback is much faster than indexing numpy.
+- Keep the lookup structures in app state:
+  - node index → (lon, lat) from the arrays
+  - (lon, lat) → node index through a `scipy.spatial.cKDTree` built over the **valid** nodes only, in a local metric projection (scale lon by cos(lat))
+- The graph is read-only after startup, so it is safe to share across requests.
+
+### Step 3: request handling: `POST /api/route`
+Request:
+```json
+{
+  "profile": "astronaut",
+  "start": {"lon": -70.1, "lat": -11.5},
+  "destinations": [{"lon": -69.8, "lat": -11.2}, {"lon": -70.4, "lat": -12.0}],
+  "end_mode": "round_trip",        // "round_trip" (default) | "fixed" | "open"
+  "end": null,                     // required only when end_mode = "fixed"
+  "time_limit_s": 5,               // optional, default 5, clamped to e.g. 1..30
+  "season": "S. Winter (Ls 90-180)"  // optional, for weather warnings only, never for weights
+}
+```
+- **Snap** each point to the nearest valid node with the KD-tree. Return the snapped coordinates and the snap distance. Reject points outside the graph bbox or farther than a configurable maximum (e.g. 1 km).
+- **Validate (HTTP 422):**
+  - the profile exists
+  - there is at least 1 destination and no more than a configurable maximum (e.g. 25)
+  - `end` is present if and only if `end_mode = "fixed"`
+  - **all snapped nodes are distinct** (start, destinations and end). Two clicks can snap to the same node; reject that and name the duplicates.
+
+### Step 4: cost matrix (rustworkx): `app/routing/matrix.py`
+- Points: `P = [start, *destinations] (+ end if fixed)`, so N = 1 + len(destinations) (+1).
+- **One Dijkstra per point**, using only the chosen profile's weight:
+  ```python
+  w = weights[profile]
+  paths = rx.dijkstra_shortest_paths(g, P[i], weight_fn=lambda e: w[e])   # {target: [source, ..., target]}
+  ```
+  The leg weight is the sum of `w[g.get_edge_data(a, b)]` over the consecutive nodes of `paths[P[j]]`. Use this, or call `rx.dijkstra_shortest_path_lengths(g, P[i], lambda e: w[e])` for the lengths. Either way, one search per point.
+- **Fill the matrix** `M[i][j]` (floats, unscaled) with the best path weight from `P[i]` to `P[j]`. **The diagonal is 0.** The graph is directed, so M is **not symmetric**.
+- **Unreachable pairs** (both cases verified):
+  - **The length is `inf`:** rustworkx still returns targets that can only be reached over ∞ edges, with length `inf`. Treat the pair as unreachable: the cell stays ∞, and **no leg path is saved**.
+  - **The target is missing from the result:** it isn't connected at all. Treat it the same way.
+- **Save each reachable leg's node path** as `legs[(i, j)]` for step 6.
+- **Output:** the N×N float matrix with ∞ meaning unreachable, plus `legs`.
+- The matrix holds shortest-path costs, so **reachability is transitive**. If start→A and A→B are finite, start→B is finite. Step 5 relies on this to explain drops.
+- **Performance:** `weight_fn` is a Python callback for each relaxed edge, so expect roughly 0.3–1 s per Dijkstra on ~2.6M edges. If that is too slow, run the N searches in a thread pool, or reduce the grid resolution.
+
+### Step 5: route solving (OR-Tools): `app/routing/solver.py`
+- **Prepare the matrix:**
+  - **Scale to integers** (OR-Tools requires them): `round(M[i][j] * SCALE)`. `SCALE` is configurable, e.g. 1000.
+  - **Replace ∞ with `BIG = 10**12`.** It must be larger than any real route cost, but small enough that summing a whole route can't overflow int64: (N + 1) · BIG plus all penalties stays far below 9.2·10¹⁸.
+  - **Drop penalty:** `PENALTY = N * max_finite_scaled_cell + 1`. This is higher than any real route cost, because a route uses at most N arcs. Assert `PENALTY < BIG`; if it isn't, lower `SCALE`.
+- **Start and end:**
+  - `round_trip`: `RoutingIndexManager(N, 1, 0)`, where node 0 is the start and depot.
+  - `fixed`: `RoutingIndexManager(N, 1, [0], [N-1])`, where the end is the last point.
+  - `open`: add a dummy node D with `M[i][D] = 0` for every i, and `M[D][i] = BIG`, then use `RoutingIndexManager(N+1, 1, [0], [D])`. D and its zero legs are never shown to the user.
+- **The model:** register the matrix as the transit callback and call `SetArcCostEvaluatorOfAllVehicles`.
+- **Allow dropping stops:** call `routing.AddDisjunction([manager.NodeToIndex(d)], PENALTY)` for **each destination only**, never for the start, end or dummy node. Because PENALTY < BIG, an unreachable stop is skipped instead of being "travelled to" along an impossible leg.
+- **Search settings:**
+  ```python
+  params = pywrapcp.DefaultRoutingSearchParameters()
+  params.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
+  params.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
+  params.time_limit.FromSeconds(time_limit_s)   # mandatory: GLS never stops by itself
+  ```
+  After the time limit, OR-Tools returns the best route found so far.
+- **Read the solution:**
+  - **Order:** walk from `routing.Start(0)` via `solution.Value(routing.NextVar(i))` until `routing.IsEnd(i)`.
+  - **Dropped:** destination d is dropped when `solution.Value(routing.NextVar(idx)) == idx`.
+- **Sanity checks:**
+  - If `SolveWithParameters` returns `None`, or the chosen route still uses a BIG arc, then no feasible route exists. This happens when the start can't reach a fixed end, and it returns a clear error (no path).
+  - **Reason for a drop:** d is `unreachable_for_profile` if `M[start][d]` is ∞ or `M[d][end]` is ∞, where the end is the start for a round trip; for an open end, only `M[start][d]` counts. This test is exact because reachability is transitive. Otherwise the stop was dropped by the time limit (`not_scheduled_within_time_limit`). This should be rare, but report it honestly.
+- **Output:** the ordered stop indices and the dropped stops with their reasons.
+
+### Step 6: route assembly: `app/routing/assemble.py`
+- **Join the saved leg paths** in the solved order into one continuous node path, dropping the duplicate node at each join (each leg starts where the previous one ended). Only legs between consecutive visited stops are used, and those are all finite, so every leg exists in `legs`. Skip the leg into the dummy open-end node.
+- **Total weight:** add up the legs using the **original unscaled** `M` values, never the scaled integers or the solver objective, which also includes penalties.
+- **Response:**
+  ```json
+  {
+    "profile": "astronaut",
+    "path": {"type": "LineString", "coordinates": [[-70.1, -11.5], ...]},   // [lon, lat]; Leaflet needs [lat, lon]
+    "stop_order": [1, 0],                  // indices into the request's destinations
+    "legs": [{"from": "start", "to": 1, "weight": 812.4}, ...],
+    "total_weight": 2150.7,
+    "dropped": [{"index": 2, "point": {...}, "reason": "unreachable_for_profile"}],
+    "snapped": {"start": {...,"distance_m": 140}, "destinations": [...], "end": null},
+    "warnings": []                         // e.g. the weather `message` for `season`, verbatim (section 6)
+  }
+  ```
+- A dropped stop is a normal result, not an error; the UI must list it with its reason. A drop does mean the rest of the route is incomplete for that profile, so show it clearly (data-sufficiency spirit, section 2).
+
+### Tests (`backend/tests/`)
+Use tiny hand-built graphs:
+- an ∞-only target (cell stays ∞, no leg path saved)
+- an isolated target (missing from the result)
+- an asymmetric uphill/downhill pair
+- each `end_mode`
+- duplicate snapped points (rejected)
+- a fixed end that can't be reached (error)
+- a total weight that matches the sum of the unscaled legs
