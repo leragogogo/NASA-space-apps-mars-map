@@ -182,7 +182,7 @@ Every frame gets `confidence`:
   - Copy `scripts/` to `<project root>/scripts/`. Every script resolves `ROOT = Path(__file__).resolve().parent.parent`, so if run from inside the skill folder its outputs land in the skill folder.
   - Install the deps: `pip install -r requirements.txt`.
   - Run in order: 01 → 08. Scripts 04–08 import constants (`REGIONS`, `AOI`, `SEASONS`, `CONTEXT`) from earlier scripts by file name, so keep the `NN_` names.
-  - Inputs are fetched live from Trek, ArcGIS and Dataverse; there is nothing to pre-download.
+  - Scripts 01-03 and 05 query Trek and ArcGIS when run, and 06 reads `data/raw/mdad/MDAD_original`. They are exploration tools only; the application never calls those APIs (see section 9).
 - **Canonical source:** `data-exploration/scripts/`. When a script changes there, re-copy it here (`cp scripts/0*.py context/skills/mars-mvp-data/scripts/`) so other agents don't use stale logic.
 
 ### Files in the data-exploration repo
@@ -233,7 +233,7 @@ requirements.txt                   venv packages (requests, pandas, numpy, pillo
 
 ### Principles
 - **The frontend consumes only our FastAPI backend.** It never calls NASA Trek, Harvard Dataverse or any other source directly. The backend owns the response format of every layer so that datasets from different sources look uniform to the client.
-- **Hybrid data strategy.** At build time `scripts/download_data.py` fetches everything into `data/raw/` (the only step that touches the network). At runtime the backend reads local files only. An optional tile proxy with a disk cache may cover zooms that were not pre-fetched. Reasons: Trek returns HTTP 500 on some tiles, demo-venue wifi is unreliable, the graph must be built from identical data every time, and MDAD has no query API (weather is computed locally).
+- **Static dataset, local files only.** For this MVP the data is static. `scripts/download_data.py` is a one-off setup step that fills `data/raw/`; after that, **neither the backend nor the frontend makes any call to an external API, and there is no proxy or cache layer.** The backend serves every layer directly from the downloaded files. If a tile or feature was not downloaded, it does not exist for the app (extend the download script and re-run it instead). Reasons: Trek returns HTTP 500 on some tiles, demo-venue wifi is unreliable, the graph must be built from identical data every time, and MDAD has no query API (weather is computed locally).
 - **Single source of truth for relief.** The slope overlay shown to users and the slope used by the router must come from the same array.
 
 ### Backend (FastAPI)
@@ -242,7 +242,7 @@ requirements.txt                   venv packages (requests, pandas, numpy, pillo
 - **Master graph** (`backend/app/graph/`): nodes carry elevation, slope class, nearby points of interest, and the four seasonal risk values with their confidence. **Season is a query parameter, not part of the graph.** Use an implicit grid held in numpy arrays and A*, not a `networkx` object. Native DEM is 200 m (~1.3M nodes over the AOI); start coarsened to ~400 m (~330k nodes), configurable. Persist the built graph under `data/graph/` (gitignored).
 - **Routing engine** (`backend/app/routing/`): cost models per mode. Slope classes (0-5 easy, 5-15 walkable, 15-25 vehicle only, 25-35 hard/vehicle limit, >35 impassable) are unconfirmed by the product owner, so keep them configurable.
 - **Caveats for routing:** weather risk is almost uniform inside the AOI (1 deg cells within +-10 %), so it acts as a season-wide penalty or warning, not a route discriminator. The 200 m DEM underestimates local slope.
-- **Tiles** (`backend/app/tiles/`): serve `data/raw/tiles/<label>/<z>/<row>/<col>.<ext>` and the optional cache-proxy fallback.
+- **Tiles** (`backend/app/tiles/`): serve `data/raw/tiles/<label>/<z>/<row>/<col>.<ext>` straight from disk (static files). No upstream fetching; a missing tile returns 404 or a transparent tile.
 
 ### Frontend (React + Vite + Leaflet)
 - Use Leaflet (`react-leaflet`) with **`L.CRS.EPSG4326`**: Trek's equatorial tiles are plain lat/lon (top-left origin -180, 90), not Web Mercator. MapLibre/Mapbox are Mercator-only and would distort the imagery.
@@ -259,7 +259,7 @@ Not needed for the MVP: numpy handles the 1200x1073 DEM. Consider `gdaldem` (slo
 README.md, AGENTS.md
 context/skills/mars-mvp-data/   this skill (SKILL.md, scripts/01-08, requirements.txt)
 .claude/skills                  symlink -> ../context/skills
-scripts/download_data.py        data pipeline (build time); scripts/requirements.txt
+scripts/download_data.py        one-off data download (static dataset); scripts/requirements.txt
 data/raw/                       downloaded datasets (gitignored): dem/, tiles/, features/, mdad/, manifest.json
 backend/
   main.py                       starter app (will probably move to app/main.py)
@@ -267,7 +267,7 @@ backend/
   app/core/                     config, settings
   app/schemas/                  client-facing response models
   app/layers/{base_imagery,relief,poi,weather}/   layer getters
-  app/tiles/                    tile serving + optional cache proxy
+  app/tiles/                    serves tiles from data/raw/tiles (static, no upstream calls)
   app/graph/                    master graph builder/loader
   app/routing/                  routing engine, cost models
   tests/
