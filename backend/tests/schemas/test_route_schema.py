@@ -10,7 +10,7 @@ BASE = {"profile": "astronaut", "start": {"lon": -70.1, "lat": -11.5},
 
 def test_minimal_request_gets_defaults():
     r = RouteRequest(**BASE)
-    assert r.end_mode.value == "round_trip" and r.end is None and r.time_limit_s == 5.0
+    assert r.end_mode.value == "round_trip" and r.end is None and r.time_limit_s == 10.0
 
 
 def test_fixed_end_requires_end_and_other_modes_forbid_it():

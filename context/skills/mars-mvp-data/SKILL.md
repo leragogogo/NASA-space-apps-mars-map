@@ -284,7 +284,7 @@ frontend/src/
   features/{map,layers,route}/  Leaflet map, layer toggles/season switcher, route UI
   hooks/, config/, utils/
 ```
-Step 0 is done: the shared contracts exist and are tested (see `references/layer-ingestion.md` section 7). All other module folders are still empty placeholders (`.gitkeep`).
+Step 0 is done: the shared contracts exist and are tested (see `references/layer-ingestion.md` section 7). Package G (routing engine) is done (`app/routing/`, see section 10 "Implementation"). All other module folders are still empty placeholders (`.gitkeep`).
 
 ## 10. Multi-destination routing (decided: rustworkx + Google OR-Tools)
 A user picks a profile, a start, several destinations and optionally an end. The backend returns one continuous path that visits the reachable destinations in the best order it finds, and reports the ones it had to drop.
@@ -335,7 +335,7 @@ Request:
   "destinations": [{"lon": -69.8, "lat": -11.2}, {"lon": -70.4, "lat": -12.0}],
   "end_mode": "round_trip",        // "round_trip" (default) | "fixed" | "open"
   "end": null,                     // required only when end_mode = "fixed"
-  "time_limit_s": 5,               // optional, default 5, clamped to e.g. 1..30
+  "time_limit_s": 10,              // optional, default DEFAULT_TIME_LIMIT_S = 10 (app/routing/contracts.py), clamped to 1..30
   "season": "S. Winter (Ls 90-180)"  // optional, for weather warnings only, never for weights
 }
 ```
@@ -409,6 +409,21 @@ Request:
   }
   ```
 - A dropped stop is a normal result, not an error; the UI must list it with its reason. A drop does mean the rest of the route is incomplete for that profile, so show it clearly (data-sufficiency spirit, section 2).
+
+### Implementation (package G, done): `backend/app/routing/`
+| File | Entry point |
+|---|---|
+| `graph.py` | `RoutingGraph.from_graph_data(GraphData)`: the `PyDiGraph` (edge payload = edge id), per-profile `cost` lists, resource arrays, node lon/lat. Helpers `edge_id`, `path_cost`, `path_resources`, `coords(nodes) -> [[lon, lat], ...]`. Package F's loader calls `from_graph_data` at startup. |
+| `matrix.py` | `build_cost_matrix(routing_graph, profile, point_nodes) -> CostMatrix` (step 4) |
+| `solver.py` | `solve(cost_matrix, end_mode, time_limit_s) -> SolverResult` (step 5); `NoFeasibleRoute` when no route exists at all (unreachable fixed end) |
+| `assemble.py` | `assemble(routing_graph, query, cost_matrix, solution, capacities=None, reserve_margin=0.0) -> RoutePlan` (step 6); budget warnings only when capacities are passed |
+| `service.py` | `plan_route(routing_graph, query, capacities=None, reserve_margin=0.0) -> RoutePlan`: the one function the API (package H) calls |
+
+Notes for package H (API):
+- Catch `NoFeasibleRoute` and return a clear error (e.g. HTTP 422 with its message). Dropped stops are not errors.
+- `LegOut` labels: `from`/`to` is `"start"`, a destination index (0-based, request order) or `"end"` (fixed end). `Leg.from_point`/`to_point` are CostMatrix point indices: point 0 = `"start"`, point k (1..D) = destination k-1, point D+1 = `"end"`. A round trip's last leg goes `to: "start"`; an open end has no final leg.
+- `path`: `{"type": "LineString", "coordinates": routing_graph.coords(plan.nodes)}`. A round trip that visits nothing has a single coordinate.
+- `weight`/`total_weight` in the API = `cost`/`total_cost` internally.
 
 ### Tests (`backend/tests/routing/`, see section 11)
 Use tiny hand-built graphs:

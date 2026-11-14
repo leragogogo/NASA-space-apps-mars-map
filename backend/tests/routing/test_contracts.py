@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 
 from app.core.resources import ProfileId
-from app.routing.contracts import CostMatrix, EndMode, RouteLimits, RouteQuery
+from app.routing.contracts import DEFAULT_TIME_LIMIT_S, CostMatrix, EndMode, RouteLimits, RouteQuery
 
 
 def q(**kw):
@@ -44,6 +44,6 @@ def test_cost_matrix_validation_and_reachability():
 
 def test_time_limit_clamp():
     lim = RouteLimits()
-    assert lim.clamp_time_limit(None) == 5.0
+    assert lim.clamp_time_limit(None) == DEFAULT_TIME_LIMIT_S == 10.0
     assert lim.clamp_time_limit(0.1) == 1.0
     assert lim.clamp_time_limit(999) == 30.0

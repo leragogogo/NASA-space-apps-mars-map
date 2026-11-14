@@ -131,7 +131,7 @@ Every ingestion module's definition of done: its real `ingest` passes `validate_
 | D. imagery catalog + tile service | 0 | real tiles |
 | E. profile cost/resource functions (`compute_edge_attrs`) | 0 | pure arrays, no layers |
 | F. graph builder, saver, loader | 0, E | `fake_inputs` |
-| G. routing matrix, solver, assembly | 0 | tiny hand-built graphs |
+| G. routing matrix, solver, assembly | **done** (`app/routing/`, SKILL.md section 10) | tiny hand-built graphs |
 | H. API routers + schemas | 0 | fakes |
 | I. frontend | endpoint table above | mocked JSON |
 
