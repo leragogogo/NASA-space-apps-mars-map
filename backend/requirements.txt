@@ -2,3 +2,5 @@ fastapi
 uvicorn[standard]
 rustworkx
 ortools
+numpy
+pytest

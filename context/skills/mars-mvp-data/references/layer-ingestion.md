@@ -107,10 +107,16 @@ All coordinates in responses are lon/lat (-180..180). Pydantic models in `app/sc
 
 ## 7. Fixtures and validation (what unblocks parallel work)
 
-Built first, by one person, in `app/layers/`:
-- `contracts.py`: `GridSpec`, `ReliefData`, `PoiData`, `PoiFeature`, `WeatherData`, `ImageryCatalog`, `GraphInputs`, `LayerDataError`.
-- `fakes.py`: synthetic data for any `GridSpec`: `fake_relief(grid, kind="flat|ramp|bowl|ridge|cliff")`, `fake_weather(grid, risk=..., confidence=...)`, `fake_poi(grid, n)`, `fake_inputs(grid)`.
-- `validate.py`: `validate_relief/poi/weather(data)` checks: shapes equal `grid.shape`, dtypes, no inf, NaN only where `valid=False`, enum ranges, lon in -180..180, features inside the bbox.
+**Implemented (step 0 done, 67 passing tests in `backend/tests/`).** Import these; do not redefine them:
+- `app/layers/contracts.py`: `GridSpec` (+ `default_grid()`, `from_bbox`), `ReliefData`, `PoiData`, `PoiFeature`, `WeatherData`, `WeatherFrame`, `ImageryCatalog`, `ImageryLayerInfo`, `GraphInputs`, enums `RiskLevel`, `Confidence`, `PoiKind`, `SEASONS`, `LayerDataError`.
+- `app/layers/fakes.py`: `fake_grid`, `fake_relief(grid, kind="flat|ramp|bowl|ridge|cliff")`, `fake_weather`, `fake_poi`, `fake_inputs`.
+- `app/layers/validate.py`: `validate_relief`, `validate_poi`, `validate_weather`, `validate_inputs`.
+- `app/layers/relief/slope.py`: `slope_deg(elev_m, grid)`, the one slope implementation.
+- `app/core/resources.py`: `ProfileId`, `EDGE_ATTRS`, `UNITS`, `attr_key`.
+- `app/core/profiles.py`: `EdgeGeometry`, `ProfileModel` protocol, `check_edge_attrs` (the graph builder <-> profile formulas interface).
+- `app/graph/contracts.py`: `GraphData` (struct-of-arrays graph, `edge_attrs(edge_id)` logical view, `save`/`load` to `graph.npz`).
+- `app/routing/contracts.py`: `RouteQuery`, `CostMatrix`, `SolverResult`, `Leg`, `RoutePlan`, `RouteLimits`, `EndMode`, `DropReason` (hand-offs between request, matrix, solver and assembly).
+- `app/schemas/route.py`, `app/schemas/layers.py`: the API models.
 
 Every ingestion module's definition of done: its real `ingest` passes `validate_*` on the real data, its output type is identical to the fake's, and it ships with tests in `backend/tests/layers/<layer>/` (offline; tests that need the real data skip when `data/raw/` is missing). See SKILL.md section 11.
 
@@ -118,7 +124,7 @@ Every ingestion module's definition of done: its real `ingest` passes `validate_
 
 | Package | Depends on | Develops against |
 |---|---|---|
-| 0. contracts + fakes + validators + `app/core/resources.py` | nothing (first, short) | |
+| 0. contracts + fakes + validators + `app/core/resources.py` | **done** | |
 | A. relief ingest + service | 0 | real DEM |
 | B. poi ingest + service | 0 | real features |
 | C. weather ingest + service | 0 | copy of the weather GeoJSON or `fake_weather` |

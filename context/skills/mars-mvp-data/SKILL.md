@@ -272,7 +272,7 @@ backend/
   app/api/routes/               one router per endpoint group
   app/core/                     config, settings
   app/schemas/                  client-facing response models
-  app/layers/{base_imagery,relief,poi,weather}/   one ingestion module per layer (ingest.py + service.py); shared contracts.py, fakes.py, validate.py live in app/layers/ (planned)
+  app/layers/{base_imagery,relief,poi,weather}/   one ingestion module per layer (ingest.py + service.py); shared `contracts.py`, `fakes.py`, `validate.py` live in `app/layers/` (done)
   app/tiles/                    serves tiles from data/raw/tiles (static, no upstream calls)
   app/graph/                    master graph builder (offline) and loader (startup), see section 10
   app/routing/                  profiles + weight formulas, cost matrix (rustworkx), solver (OR-Tools), route assembly
@@ -283,7 +283,7 @@ frontend/src/
   features/{map,layers,route}/  Leaflet map, layer toggles/season switcher, route UI
   hooks/, config/, utils/
 ```
-The new folders are empty (`.gitkeep`); no application code exists yet beyond the starters.
+Step 0 is done: the shared contracts exist and are tested (see `references/layer-ingestion.md` section 7). All other module folders are still empty placeholders (`.gitkeep`).
 
 ## 10. Multi-destination routing (decided: rustworkx + Google OR-Tools)
 A user picks a profile, a start, several destinations and optionally an end. The backend returns one continuous path that visits the reachable destinations in the best order it finds, and reports the ones it had to drop.

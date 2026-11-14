@@ -28,7 +28,7 @@ backend/app/                    api/routes, core, schemas, layers/{base_imagery,
 backend/tests/
 frontend/src/                   api, components, features/{map,layers,route}, hooks, config, utils
 ```
-Most new folders are empty placeholders (`.gitkeep`); there is no application code yet beyond the Vite and FastAPI starters.
+**Shared contracts already exist (step 0, tested, 67 tests):** `app/core/{resources,profiles}.py`, `app/layers/{contracts,fakes,validate}.py`, `app/layers/relief/slope.py`, `app/graph/contracts.py` (`GraphData`), `app/routing/contracts.py`, `app/schemas/{route,layers}.py`. Import from these; do not redefine them. Everything else is still an empty placeholder (`.gitkeep`) beyond the Vite and FastAPI starters.
 
 ## Commands
 - Data: `pip install -r scripts/requirements.txt && python scripts/download_data.py` (`--only dem|tiles|pois|mdad`, `--max-zoom N`, `--force`).
