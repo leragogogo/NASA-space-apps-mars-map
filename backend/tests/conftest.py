@@ -49,7 +49,7 @@ def _cell(lon, lat, season_name, **overrides):
 
 def build_fixture_data(root: Path) -> Path:
     from app.core.config import AOI
-    from app.layers.relief.slope import pixel_size_m
+    from app.layers.contracts import GridSpec
 
     raw = root / "raw"
     # --- tiles: two base sources, one relief source (jpg), one poi source
@@ -60,9 +60,9 @@ def build_fixture_data(root: Path) -> Path:
     _tile(raw / "tiles/MC18_PolySulfate_Mineral_IndicatorV2_SP/5/2/3.png")
 
     # --- DEM: plane rising to the east with a constant slope
-    dx, _ = pixel_size_m(DEM_SHAPE, AOI)
-    row = np.arange(DEM_SHAPE[1]) * dx * math.tan(math.radians(FIXTURE_SLOPE_DEG)) - 3000.0
-    dem = np.tile(row, (DEM_SHAPE[0], 1)).astype("float32")
+    dx_row, _ = GridSpec(*AOI, ncols=DEM_SHAPE[1], nrows=DEM_SHAPE[0]).metric_spacing()  # metres per row
+    dem = (np.arange(DEM_SHAPE[1]) * dx_row[:, None] * math.tan(math.radians(FIXTURE_SLOPE_DEG)) - 3000.0
+           ).astype("float32")
     (raw / "dem").mkdir(parents=True)
     tifffile.imwrite(raw / "dem/dem_blend200m_aoi.tif", dem)
 

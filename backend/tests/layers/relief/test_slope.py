@@ -2,7 +2,8 @@ import math
 
 import numpy as np
 from app.core.config import AOI, SLOPE_CLASSES
-from app.layers.relief.slope import M_PER_DEG, classify, pixel_size_m, slope_degrees
+from app.layers.contracts import GridSpec
+from app.layers.relief.slope import M_PER_DEG, classify, pixel_size_m, slope_deg, slope_degrees
 
 
 def test_pixel_size_matches_real_grid():
@@ -13,11 +14,25 @@ def test_pixel_size_matches_real_grid():
 
 def test_slope_of_tilted_plane():
     shape = (5, 7)
-    dx, _ = pixel_size_m(shape, AOI)
-    plane = np.tile(
-        np.arange(shape[1]) * dx * math.tan(math.radians(20)), (shape[0], 1)
-    )
-    assert np.allclose(slope_degrees(plane, AOI), 20.0)
+    grid = GridSpec(*AOI, ncols=shape[1], nrows=shape[0])
+    dx_row, _ = grid.metric_spacing()  # east-west cell size shrinks with latitude
+    rise_per_col = 200.0  # metres of rise per column; same on every row, so the plane is a true plane
+    plane = np.tile(np.arange(shape[1]) * rise_per_col, (shape[0], 1))
+    expected = np.degrees(np.arctan(rise_per_col / dx_row))[:, None] * np.ones(shape)
+    assert np.allclose(slope_degrees(plane, AOI), expected, atol=1e-4)
+
+
+def test_slope_degrees_is_the_shared_slope_deg():
+    """Display slope and routing slope must be one implementation (SKILL.md section 9)."""
+    rng = np.random.default_rng(0)
+    elev = rng.normal(0, 50, (9, 11))
+    elev[3, 4] = np.nan
+    grid = GridSpec(*AOI, ncols=11, nrows=9)
+    shared = slope_deg(elev, grid)
+    got = slope_degrees(elev, AOI)
+    assert got.dtype == np.float32
+    assert np.array_equal(got, shared, equal_nan=True)
+    assert np.isnan(got[3, 4]) and np.isfinite(got[3, 5])  # nodata does not poison its neighbours
 
 
 def test_classify_edges_and_nodata():
