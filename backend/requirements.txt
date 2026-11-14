@@ -4,3 +4,7 @@ rustworkx
 ortools
 numpy
 pytest
+tifffile
+pillow
+shapely
+httpx

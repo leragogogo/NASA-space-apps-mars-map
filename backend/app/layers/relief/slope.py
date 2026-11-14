@@ -1,10 +1,14 @@
-"""Slope from the (resampled) elevation grid. The single implementation shared by the relief
-display overlay and everything else, so users and the router see the same slope."""
+"""Slope from the elevation grid. The single implementation shared by the relief display overlay
+and the master graph, so users and the router see the same slope (SKILL.md section 9)."""
 from __future__ import annotations
+
+import math
 
 import numpy as np
 
-from app.layers.contracts import GridSpec
+from app.layers.contracts import MARS_RADIUS_M, GridSpec
+
+M_PER_DEG = 2 * math.pi * MARS_RADIUS_M / 360  # metres per degree of arc on the Mars 2000 sphere
 
 
 def _index_gradient(a: np.ndarray, axis: int) -> np.ndarray:
@@ -39,3 +43,26 @@ def slope_deg(elev_m: np.ndarray, grid: GridSpec) -> np.ndarray:
     gx = _index_gradient(elev, axis=1) / dx_m[:, None]
     gy = _index_gradient(elev, axis=0) / dy_m
     return np.degrees(np.arctan(np.hypot(gx, gy))).astype(np.float32)
+
+
+def pixel_size_m(shape: tuple[int, int], aoi: tuple) -> tuple[float, float]:
+    """(east-west, north-south) pixel size in metres for a grid covering `aoi`,
+    east-west measured at the latitude of the area centre."""
+    ny, nx = shape
+    w, s, e, n = aoi
+    lat_c = math.radians((s + n) / 2)
+    return (e - w) / nx * M_PER_DEG * math.cos(lat_c), (n - s) / ny * M_PER_DEG
+
+
+def slope_degrees(elev: np.ndarray, aoi: tuple) -> np.ndarray:
+    """`slope_deg` for a grid that covers `aoi` exactly (what the relief getter holds)."""
+    ny, nx = elev.shape
+    return slope_deg(elev, GridSpec(*aoi, ncols=nx, nrows=ny))
+
+
+def classify(slope: np.ndarray, classes) -> np.ndarray:
+    """Index into `classes` per cell (lower edge inclusive); -1 where slope is NaN."""
+    edges = [c.max_deg for c in classes[:-1]]
+    out = np.digitize(slope, edges).astype(np.int8)
+    out[np.isnan(slope)] = -1
+    return out

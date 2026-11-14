@@ -23,15 +23,18 @@ Interactive Mars map for astronauts and mission planners: 4 stacked layers (base
 ```
 context/skills/mars-mvp-data/   project skill + reference scripts
 scripts/download_data.py        data pipeline
+scripts/build_weather/          MDAD -> data/derived/weather/ (Layer 4 grid), with tests/
 data/raw/                       downloaded data (gitignored)
 backend/app/                    api/routes, core, schemas, layers/{base_imagery,relief,poi,weather} (ingest + service each), tiles, graph, routing
 backend/tests/
 frontend/src/                   api, components, features/{map,layers,route}, hooks, config, utils
 ```
 **Shared contracts already exist (step 0, tested, 67 tests):** `app/core/{resources,profiles}.py`, `app/layers/{contracts,fakes,validate}.py`, `app/layers/relief/slope.py`, `app/graph/contracts.py` (`GraphData`), `app/routing/contracts.py`, `app/schemas/{route,layers}.py`. Import from these; do not redefine them. Everything else is still an empty placeholder (`.gitkeep`) beyond the Vite and FastAPI starters.
+The backend has the four layer getters (`backend/app/layers/`), the `/api/get-layer-*` and `/api/tiles` endpoints, and `scripts/build_weather/`; `graph/`, `routing/` and the frontend are still placeholders (`.gitkeep`). Design: `docs/superpowers/specs/2026-11-14-layer-getters-design.md`. The getters predate `references/layer-ingestion.md` and differ from it (one `getter.py` per layer, `/api/get-layer-*` paths, POI `category`, weather in `data/derived/`); the spec's section 7a lists the differences to settle.
 
 ## Commands
-- Data: `pip install -r scripts/requirements.txt && python scripts/download_data.py` (`--only dem|tiles|pois|mdad`, `--max-zoom N`, `--force`).
+- Data: `pip install -r scripts/requirements.txt && python scripts/download_data.py && python scripts/build_weather/build_weather.py` (`download_data.py`: `--only dem|tiles|pois|mdad`, `--max-zoom N`, `--force`).
+- Backend tests: `cd backend && pip install -r requirements.txt && pytest`. Script tests: `pytest scripts/build_weather/tests`.
 - Backend: see README (uvicorn on :8000). Frontend: see README (Vite on :5173, proxies `/api/*`).
 
 ## Development rules (all agents; full text in SKILL.md section 11)

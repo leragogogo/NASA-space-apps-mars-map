@@ -14,6 +14,16 @@ uvicorn main:app --reload --port 8000
 
 API docs: http://localhost:8000/docs
 
+Layer endpoints: `/api/get-layer-one` (imagery sources), `/api/get-layer-two` (relief; `/point?lon=&lat=`, `/walkability.png`),
+`/api/get-layer-three` (points of interest, `?category=`), `/api/get-layer-four?season=winter` (dust-storm risk),
+`/api/tiles/{source}/{z}/{row}/{col}`. A layer whose data is missing answers 503 with the script to run.
+
+Tests (pytest is in `requirements.txt`; tests mirror the code in `tests/<module>/`, real-data checks skip when `data/` is missing):
+
+```bash
+pytest
+```
+
 ## Frontend
 
 ```bash
@@ -31,6 +41,9 @@ The datasets are not stored in git (`data/` is gitignored). After cloning, run t
 ```bash
 pip install -r scripts/requirements.txt
 python scripts/download_data.py        # DEM, map tiles, POI vectors and MDAD storm data -> data/raw/
+python scripts/build_weather/build_weather.py   # Layer 4 dust-storm grid -> data/derived/weather/
 ```
+
+Script tests: `pytest scripts/build_weather/tests`
 
 Project context for humans and agents: `context/skills/mars-mvp-data/SKILL.md`.

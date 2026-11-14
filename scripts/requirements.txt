@@ -1,3 +1,7 @@
 requests
 tifffile
 numpy
+pillow
+pandas
+scipy
+pytest
