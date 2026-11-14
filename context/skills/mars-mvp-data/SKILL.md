@@ -1,6 +1,6 @@
 ---
 name: mars-mvp-data
-description: Project context, requirements and exact datasets for the Mars astronaut-map MVP: a hyper-local, 4-layer map. It shows base imagery, relief/walkability and points of interest for East Melas Chasma, plus a seasonal dust-storm risk layer on a 1° grid over the wider Valles Marineris area. Use it whenever building, extending or debugging any part of this project: fetching NASA Trek tiles or vectors, computing slopes, querying MDAD storm data, showing risk and confidence labels, or building the multi-destination route planner (rustworkx graph + Google OR-Tools, per-profile edge weights for astronaut and car). Bundles the working Python scripts (scripts/01-08) as a reference implementation.
+description: Project context, requirements and exact datasets for the Mars astronaut-map MVP: a hyper-local, 4-layer map. It shows base imagery, relief/walkability and points of interest for East Melas Chasma, plus a seasonal dust-storm risk layer on a 1° grid over the wider Valles Marineris area. Use it whenever building, extending or debugging any part of this project: fetching NASA Trek tiles or vectors, computing slopes, querying MDAD storm data, showing risk and confidence labels, writing a layer ingestion module, defining per-profile edge costs and resource use (oxygen, water, energy), or building the multi-destination route planner (rustworkx graph + Google OR-Tools, per-profile edge weights for astronaut and car). Bundles the working Python scripts (scripts/01-08) as a reference implementation.
 ---
 
 # Mars MVP: data skill
@@ -203,7 +203,10 @@ requirements.txt                   venv packages (requests, pandas, numpy, pillo
 
 ## 8. Open questions / next steps
 - Confirm slope thresholds for walking vs vehicles with the product owner.
-- Confirm the per-profile edge-weight formulas (astronaut, car) and their inputs (slope, distance, roughness, energy, oxygen). See section 10.
+- Confirm the per-profile cost formulas, resource formulas, units and parameter values (suit mass, capacities, rates). Proposed in `references/edge-cost-model.md`; all constants are placeholders.
+- Decide how the weather layer file reaches `data/raw/weather/` (copy from `data-exploration/outputs/weather/` or run scripts 06 -> 07 from the download step).
+- Where is the habitat (needed for walk-back feasibility, future)?
+- Future, not in the MVP (details in `references/edge-cost-model.md` section 10): walk-back feasibility filter, solar-particle-event shelter reachability, per-astronaut calibration from heart rate, higher-resolution slopes (24 m CTX DTMs, optionally via GDAL), shelter-candidate detection from the DEM.
 - Is the 200 m DEM enough for the demo, or should we pull the 24 m CTX DTMs from PDS for a sub-area?
 - ~~Weather display scale~~: **decided, use the Valles Marineris 1° grid** (section 5, Layer 4).
 
@@ -239,8 +242,8 @@ requirements.txt                   venv packages (requests, pandas, numpy, pillo
 
 ### Backend (FastAPI)
 - Four independent layer endpoints (base imagery, relief, points of interest, weather) plus one route endpoint: `POST /api/route`, a **multi-destination** route for a profile (`astronaut` | `car`; replaces the earlier `walker` | `vehicle` naming). Full spec in section 10.
-- **Layer getter module** (`backend/app/layers/<layer>/`): one getter per layer with a common interface (for example `sample(lon, lat)` and `cells(bbox)`). Elevation and slope come from the DEM array held in memory, points of interest from a spatial index, weather from a season lookup. Imagery is tile-serving only; the graph does not use it.
-- **Master graph** (`backend/app/graph/`): a **rustworkx `PyDiGraph`** built offline from the layer getters, with one precomputed weight per profile on every directed edge. Nodes carry elevation, slope, nearby points of interest, and the four seasonal risk values with their confidence. **Season is a query parameter, not part of the graph or the edge weights.** Native DEM is 200 m (~1.3M nodes over the AOI); start coarsened to ~400 m (~330k nodes, ~2.6M directed edges with 8 neighbours), configurable. Persist the built graph under `data/graph/` (gitignored). (This supersedes the earlier "implicit numpy grid + A*" decision.)
+- **Layer ingestion modules** (`backend/app/layers/<layer>/`): each turns `data/raw/` files into normalised, validated data aligned to one shared `GridSpec` (`ingest.py`), plus a client-facing half (`service.py`). The graph builder consumes only that output and never reads `data/raw/` itself. Imagery is tile-serving only; the graph does not use it. **Contract, per-layer fields, fixtures and parallel work packages: `references/layer-ingestion.md`.**
+- **Master graph** (`backend/app/graph/`): a **single rustworkx `PyDiGraph`** built offline from the layer ingestion output. Every directed edge carries, **for each profile, a routing `cost` plus resource consumption** (time, O2, CO2, water, energy), stored as struct-of-arrays. Model and formulas: `references/edge-cost-model.md`. Nodes carry elevation, slope, nearby points of interest, and the four seasonal risk values with their confidence. **Season is a query parameter, not part of the graph or the edge weights.** Native DEM is 200 m (~1.3M nodes over the AOI); start coarsened to ~400 m (~330k nodes, ~2.6M directed edges with 8 neighbours), configurable. Persist the built graph under `data/graph/` (gitignored). (This supersedes the earlier "implicit numpy grid + A*" decision.)
 - **Routing engine** (`backend/app/routing/`): per-profile cost formulas, the rustworkx cost matrix and the OR-Tools solver. Slope classes (0-5 easy, 5-15 walkable, 15-25 vehicle only, 25-35 hard/vehicle limit, >35 impassable) are unconfirmed by the product owner, so keep them configurable.
 - **Caveats for routing:** weather risk is almost uniform inside the AOI (1 deg cells within +-10 %), so it acts as a season-wide warning, not a route discriminator. The 200 m DEM underestimates local slope.
 - **Tiles** (`backend/app/tiles/`): serve `data/raw/tiles/<label>/<z>/<row>/<col>.<ext>` straight from disk (static files). No upstream fetching; a missing tile returns 404 or a transparent tile.
@@ -258,7 +261,9 @@ Not needed for the MVP: numpy handles the 1200x1073 DEM. Consider `gdaldem` (slo
 ### Repository structure
 ```
 README.md, AGENTS.md
-context/skills/mars-mvp-data/   this skill (SKILL.md, scripts/01-08, requirements.txt)
+context/skills/mars-mvp-data/   this skill (SKILL.md, references/, scripts/01-08, requirements.txt)
+  references/layer-ingestion.md   contract between raw data and the graph, fixtures, work packages
+  references/edge-cost-model.md   per-profile edge cost and resource formulas
 .claude/skills                  symlink -> ../context/skills
 scripts/download_data.py        one-off data download (static dataset); scripts/requirements.txt
 data/raw/                       downloaded datasets (gitignored): dem/, tiles/, features/, mdad/, manifest.json
@@ -267,7 +272,7 @@ backend/
   app/api/routes/               one router per endpoint group
   app/core/                     config, settings
   app/schemas/                  client-facing response models
-  app/layers/{base_imagery,relief,poi,weather}/   layer getters
+  app/layers/{base_imagery,relief,poi,weather}/   one ingestion module per layer (ingest.py + service.py); shared contracts.py, fakes.py, validate.py live in app/layers/ (planned)
   app/tiles/                    serves tiles from data/raw/tiles (static, no upstream calls)
   app/graph/                    master graph builder (offline) and loader (startup), see section 10
   app/routing/                  profiles + weight formulas, cost matrix (rustworkx), solver (OR-Tools), route assembly
@@ -292,26 +297,29 @@ A user picks a profile, a start, several destinations and optionally an end. The
 | `astronaut` | walking EVA crew | slope > 15° → ∞ |
 | `car` | rover / vehicle | slope > 35° → ∞ |
 
-- Each profile has **its own weight formula**, which combines every relevant parameter: 3D distance, signed slope (uphill ≠ downhill), roughness, energy, oxygen (astronaut) and so on.
+- Profile ids are **`astronaut` and `car`** everywhere (graph keys, API, config).
+- Each profile has **its own cost formula**, which combines every relevant parameter: 3D distance, signed slope (uphill ≠ downhill), roughness, energy and so on. **Besides `cost`, each profile also stores per-edge resource consumption** (`time_s`, `o2_g`, `co2_g`, `water_g`, `energy_wh`). Formulas, units and parameters: `references/edge-cost-model.md`.
+- Weather risk is not in the cost: weights are precomputed and the season is a request parameter.
 - The formulas are **not confirmed by the product owner**. Keep them in one place (`app/routing/profiles.py`) with their constants in config, and record a `formula_version` in the saved graph.
-- Weights are an abstract cost, not metres. If a profile also needs a readable figure (time, Wh, O₂ kg), compute it per leg separately.
+- `cost` is an abstract cost (flat-equivalent metres). Readable figures (time, O2, Wh) come from the stored resource attributes, summed per leg after solving.
 - Slope must come from the same array as the relief layer (section 9).
 
 ### Step 1: graph construction (offline, once): `app/graph/build.py`
 - **Nodes:** terrain points of the (coarsened) DEM grid. Use `node index = row * ncols + col` and add every cell in order, so the grid ↔ node mapping is plain arithmetic. Nodata cells become nodes with no edges.
 - **Edges:** **directed**, one per ordered pair of neighbours (8-neighbourhood), because uphill and downhill cost differently. A→B and B→A are separate edges with separate weights.
-- **One final weight per profile on every edge.** Compute all profiles with vectorised numpy over edge arrays, not one Python loop per edge.
-- **Impassable = `math.inf`.** If a profile can't use an edge, its weight is ∞. **Every edge has a weight for every profile;** an edge is never left out for one profile, so all profiles share the same topology.
-- **Weights must be ≥ 0 and never NaN.** rustworkx rejects negative or NaN weights. A downhill bonus must still leave a weight ≥ 0.
+- **One attribute set per profile on every edge:** `cost` (what routing minimises) plus the resources. Logical view per edge: `{"astronaut": {"cost": .., "o2_g": .., "water_g": ..}, "car": {...}}`; physically one array per `(profile, attribute)`, never a dict per edge. Compute all profiles with vectorised numpy over edge arrays, not one Python loop per edge.
+- **Impassable = `math.inf`.** If a profile can't use an edge, its `cost` (and resource attributes) are ∞. **Every edge has every attribute for every profile;** an edge is never left out for one profile, so all profiles share the same topology.
+- **`cost` and resources must be ≥ 0 and never NaN.** rustworkx rejects negative or NaN weights. A downhill bonus must still leave a weight ≥ 0.
+- **Inputs come only from the layer ingestion output (`GraphInputs`)**, never from `data/raw/` directly (`references/layer-ingestion.md`).
 - **Persist** to `data/graph/` (gitignored) as `graph.npz`:
   - node arrays: `lon`, `lat`, `elev`, `valid`
-  - edge arrays: `src`, `dst`, `w_astronaut`, `w_car`
+  - edge arrays: `src`, `dst`, and for every profile `p` and attribute `a` an array named `p__a` (e.g. `astronaut__cost`, `astronaut__o2_g`, `car__energy_wh`)
   - metadata: grid shape, resolution, DEM file hash, `formula_version`
 - The loader rebuilds only when the metadata no longer matches. It is not rebuilt on every start.
 
 ### Step 2: startup: `app/graph/loader.py` (FastAPI lifespan)
 - Load `graph.npz` once and build the `PyDiGraph`: `g.add_nodes_from(range(n))`, then `g.add_edges_from(zip(src, dst, range(m)))`. The **edge payload is the edge id**.
-- Keep the per-profile weights as Python lists indexed by edge id: `weights = {"astronaut": w_a.tolist(), "car": w_c.tolist()}`. Indexing a list from the Python `weight_fn` callback is much faster than indexing numpy.
+- Keep each profile's **`cost`** as a Python list indexed by edge id: `weights = {p: arrays[f"{p}__cost"].tolist() for p in profiles}`. Indexing a list from the Python `weight_fn` callback is much faster than indexing numpy. Keep the **resource** arrays as numpy (`attrs[p][a]`); they are only read for the edges of the final path.
 - Keep the lookup structures in app state:
   - node index → (lon, lat) from the arrays
   - (lon, lat) → node index through a `scipy.spatial.cKDTree` built over the **valid** nodes only, in a local metric projection (scale lon by cos(lat))
@@ -384,6 +392,7 @@ Request:
 ### Step 6: route assembly: `app/routing/assemble.py`
 - **Join the saved leg paths** in the solved order into one continuous node path, dropping the duplicate node at each join (each leg starts where the previous one ended). Only legs between consecutive visited stops are used, and those are all finite, so every leg exists in `legs`. Skip the leg into the dummy open-end node.
 - **Total weight:** add up the legs using the **original unscaled** `M` values, never the scaled integers or the solver objective, which also includes penalties.
+- **Resources:** for each leg, sum `attrs[profile][a][edge_id]` over its edges (`edge_id = g.get_edge_data(u, v)`), for every attribute. Report per leg and in total, and compare the totals with the capacities in config; add a warning for each exceeded budget. Budgets are not enforced inside the search in the MVP (walk-back filtering is future work, see `references/edge-cost-model.md` section 7).
 - **Response:**
   ```json
   {
@@ -392,6 +401,7 @@ Request:
     "stop_order": [1, 0],                  // indices into the request's destinations
     "legs": [{"from": "start", "to": 1, "weight": 812.4}, ...],
     "total_weight": 2150.7,
+    "resources": {"time_s": 5400, "o2_g": 910, "co2_g": 1050, "water_g": 1800, "energy_wh": 52},   // totals; each leg has the same keys
     "dropped": [{"index": 2, "point": {...}, "reason": "unreachable_for_profile"}],
     "snapped": {"start": {...,"distance_m": 140}, "destinations": [...], "end": null},
     "warnings": []                         // e.g. the weather `message` for `season`, verbatim (section 6)
@@ -399,7 +409,7 @@ Request:
   ```
 - A dropped stop is a normal result, not an error; the UI must list it with its reason. A drop does mean the rest of the route is incomplete for that profile, so show it clearly (data-sufficiency spirit, section 2).
 
-### Tests (`backend/tests/`)
+### Tests (`backend/tests/routing/`, see section 11)
 Use tiny hand-built graphs:
 - an ∞-only target (cell stays ∞, no leg path saved)
 - an isolated target (missing from the result)
@@ -408,3 +418,19 @@ Use tiny hand-built graphs:
 - duplicate snapped points (rejected)
 - a fixed end that can't be reached (error)
 - a total weight that matches the sum of the unscaled legs
+
+## 11. Development rules (all agents)
+These apply to every agent and every change.
+
+1. **One subdirectory per module.** Whenever you create new code, put it in a subdirectory named after the module, and create that directory if it does not exist. Never leave loose files at a package root.
+   - Backend: `backend/app/<module>/` with an `__init__.py` (for example `app/graph/`, `app/routing/`, `app/layers/relief/`). `main.py` only wires things together.
+   - Frontend: `frontend/src/<area>/<Module>/` (for example `components/RouteLegend/`, `features/map/`).
+   - Scripts: `scripts/<module>/`.
+2. **Every piece of new code ships with tests, in the same change.**
+   - Backend: pytest. Tests mirror the module path: code in `backend/app/<module>/<file>.py` is tested in `backend/tests/<module>/test_<file>.py`. Create `backend/tests/<module>/` (with an `__init__.py`, so equal file names in different modules don't clash) if it does not exist. Run `cd backend && pytest`. If `pytest` is not in `backend/requirements.txt` yet, add it.
+   - Frontend: Vitest (+ React Testing Library, jsdom), with the test next to the source as `<Name>.test.jsx`. None is installed yet: the first agent that adds a frontend test also adds the dev dependencies and a `"test": "vitest run"` script in `frontend/package.json`.
+   - Scripts: tests in `scripts/<module>/tests/`.
+3. **Tests are offline and deterministic.** No network (the project reads static local files only). Use the synthetic fixtures (`app/layers/fakes.py`) and tiny hand-built graphs and arrays. A test that needs the real downloaded data must skip itself when `data/raw/` is missing (`pytest.mark.skipif`), so a fresh clone still passes.
+4. **Cover the edge cases named in this skill:** unreachable and isolated stops, `inf` weights, uphill versus downhill asymmetry, missing-data confidence labels, longitude wrap (0-360 versus -180..180), nodata cells.
+5. **Run the tests before you finish, and report failures honestly.** Do not mark work done on a red or skipped suite without saying so.
+6. **Keep the docs in step with the code.** If a change alters a contract, formula, endpoint or folder, update the matching file in `references/` (or this file) and `AGENTS.md` in the same change.
