@@ -230,8 +230,9 @@ requirements.txt                   venv packages (requests, pandas, numpy, pillo
 | log | `data/raw/manifest.json` | counts per dataset |
 
 - Tile row/col are WMTS indices with a top-left origin (same as XYZ rows). Read `TileWidth` per layer: 512 px for CTX global and HiRISE, 256 px for the rest.
-- A few tiles are genuinely unavailable (e.g. 3 tiles of the CTX global mosaic return HTTP 500). They are reported as `unavailable`/`missing`, not failures.
-- The delivered weather layer (`context_weather_frames.geojson`) is derived from the MDAD file by skill scripts 06 -> 07; the download script only fetches the input.
+- A few tiles are genuinely unavailable (e.g. some tiles of the CTX global mosaic intermittently return HTTP 500). They are reported as `unavailable`/`missing`, not failures.
+- **13 CTX global mosaic tiles over the AOI (z5, z8, z9) are stored truncated on Trek:** HTTP 200 with a matching Content-Length, but the image is cut off, and every re-download returns the same bytes. The script fully decodes every tile (fresh and already on disk) and does not keep ones that fail; they are reported as `corrupt` and the app treats them as missing. The primary Coprates mosaic is unaffected.
+- The delivered weather layer (`context_weather_frames.geojson`) is derived from the MDAD file by skill scripts 06 -> 07; the download script only fetches the input. `python scripts/build_weather/build_weather.py` ports that logic into the repo and writes `data/derived/weather/context_weather_frames.geojson` + `aoi_weather_frames.json`; its test checks the output is identical to the skill scripts'.
 
 ## 9. Application architecture (decided)
 

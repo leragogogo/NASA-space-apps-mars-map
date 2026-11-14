@@ -32,6 +32,7 @@ from pathlib import Path
 import numpy as np
 import requests
 import tifffile
+from PIL import Image
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
@@ -141,10 +142,27 @@ def tile_range(deg, bbox):
     return (int((90 - n) // deg), int((90 - s) // deg)), (int((w + 180) // deg), int((e + 180) // deg))
 
 
+def is_valid_image(data: bytes) -> bool:
+    """True if the bytes decode fully as an image.
+
+    Some Trek tiles are stored truncated upstream: HTTP 200, a matching Content-Length,
+    but the image is cut off (e.g. 13 CTX_beta01_uncontrolled_5m_Caltech tiles over the AOI).
+    Re-downloading returns the same bytes, so they are treated as missing.
+    """
+    try:
+        with Image.open(io.BytesIO(data)) as im:
+            im.load()
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def fetch_tile(tmpl, ext, dest_root, z, r, c, force):
     dest = dest_root / str(z) / str(r) / f"{c}.{ext}"
     if dest.exists() and not force:
-        return "cached"
+        if is_valid_image(dest.read_bytes()):
+            return "cached"
+        dest.unlink()  # corrupt file saved by an earlier run: fetch it again
     url = tmpl.replace("{TileMatrix}", str(z)).replace("{TileRow}", str(r)).replace("{TileCol}", str(c))
     try:
         resp = SESSION.get(url, timeout=60)
@@ -153,6 +171,8 @@ def fetch_tile(tmpl, ext, dest_root, z, r, c, force):
     except requests.RequestException:
         return "error"
     if resp.status_code == 200 and resp.headers.get("content-type", "").startswith("image") and resp.content:
+        if not is_valid_image(resp.content):
+            return "corrupt"  # served truncated upstream; not saved, so the app sees it as missing
         write_atomic(dest, resp.content)
         return "ok"
     return "missing"  # no coverage for this tile
@@ -177,7 +197,7 @@ def fetch_tiles(force, min_zoom, max_zoom, workers):
             jobs += [(z, r, c) for r in range(r0, r1 + 1) for c in range(c0, c1 + 1)]
         with cf.ThreadPoolExecutor(workers) as ex:
             results = list(ex.map(lambda j: fetch_tile(tmpl, ext, dest_root, *j, force), jobs))
-        counts = {k: results.count(k) for k in ("ok", "cached", "missing", "unavailable", "error")}
+        counts = {k: results.count(k) for k in ("ok", "cached", "missing", "unavailable", "corrupt", "error")}
         print(f"[tiles] {role} ({label}) z{min_zoom}-{top}: {len(jobs)} tiles {counts}")
         report[label] = {"role": role, "zoom": [min_zoom, top], "max_zoom_served": max(levels),
                          "ext": ext, "tiles": len(jobs), **counts}
