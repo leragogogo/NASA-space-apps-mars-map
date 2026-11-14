@@ -1,7 +1,14 @@
 """Shared test fixtures: a tiny, fully synthetic data/ folder that mimics the real layout."""
 import json
 import math
+import os
 from pathlib import Path
+
+# Set before main.py is imported (it builds the app at import time). The database then defaults to
+# app.db inside each test's data folder, never the real one.
+TEST_JWT_SECRET = "test-secret-key-that-is-at-least-32-bytes"
+os.environ["JWT_SECRET_KEY"] = TEST_JWT_SECRET
+os.environ.pop("MARS_DATABASE_URL", None)
 
 import numpy as np
 import pytest
@@ -139,3 +146,13 @@ def empty_client(tmp_path):
     from main import create_app
     with TestClient(create_app(Settings(data_dir=tmp_path))) as c:
         yield c
+
+
+@pytest.fixture
+def db_session(tmp_path):
+    """A session on a fresh SQLite file with every table created."""
+    from app.db.session import init_db, make_engine
+    engine = make_engine(f"sqlite:///{tmp_path / 'test.db'}")
+    with init_db(engine)() as session:
+        yield session
+    engine.dispose()

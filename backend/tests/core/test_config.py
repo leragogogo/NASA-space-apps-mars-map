@@ -25,3 +25,17 @@ def test_slope_classes_are_contiguous():
 def test_tile_sources_cover_three_layers():
     assert {d.layer for d in TILE_SOURCES.values()} == {"base_imagery", "relief", "poi"}
     assert AOI == (-71.8, -13.4, -68.0, -10.0)
+
+
+def test_database_url_defaults_to_data_dir(monkeypatch, tmp_path):
+    monkeypatch.delenv("MARS_DATABASE_URL", raising=False)
+    assert Settings(data_dir=tmp_path).database_url == f"sqlite:///{tmp_path / 'app.db'}"
+    monkeypatch.setenv("MARS_DATABASE_URL", "sqlite://")
+    assert Settings(data_dir=tmp_path).database_url == "sqlite://"
+
+
+def test_jwt_secret_comes_from_env(monkeypatch):
+    monkeypatch.setenv("JWT_SECRET_KEY", "from-env")
+    assert Settings().jwt_secret_key == "from-env"
+    monkeypatch.delenv("JWT_SECRET_KEY")
+    assert Settings().jwt_secret_key is None

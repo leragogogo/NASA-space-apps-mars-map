@@ -8,3 +8,8 @@ tifffile
 pillow
 shapely
 httpx
+sqlalchemy
+pyjwt
+pwdlib[argon2]
+python-multipart
+email-validator
