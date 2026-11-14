@@ -4,6 +4,7 @@ Point index convention (CostMatrix.nodes): 0 = start, 1..D = destinations in req
 D+1 = end (only for end_mode "fixed"). Destination indices elsewhere (stop_order, dropped)
 are 0-based into the request's destinations. Spec: SKILL.md section 10.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -11,8 +12,10 @@ from enum import StrEnum
 from typing import Mapping
 
 import numpy as np
-
 from app.core.resources import ProfileId
+
+# TODO: move to a shared constants module (e.g. app/core/constants.py).
+DEFAULT_TIME_LIMIT_S = 10.0  # solver search time when the request gives none
 
 
 class EndMode(StrEnum):
@@ -30,7 +33,7 @@ class DropReason(StrEnum):
 class RouteLimits:
     max_destinations: int = 25
     max_snap_distance_m: float = 1000.0
-    default_time_limit_s: float = 5.0
+    default_time_limit_s: float = DEFAULT_TIME_LIMIT_S
     min_time_limit_s: float = 1.0
     max_time_limit_s: float = 30.0
 
@@ -48,15 +51,19 @@ class RouteQuery:
     destination_nodes: tuple[int, ...]
     end_mode: EndMode = EndMode.ROUND_TRIP
     end_node: int | None = None
-    time_limit_s: float = 5.0
+    time_limit_s: float = DEFAULT_TIME_LIMIT_S
     season: str | None = None  # for weather warnings only, never for weights
 
     def __post_init__(self):
         if not self.destination_nodes:
             raise ValueError("at least one destination is required")
         if (self.end_mode == EndMode.FIXED) != (self.end_node is not None):
-            raise ValueError("end_node must be given if and only if end_mode is 'fixed'")
-        nodes = [self.start_node, *self.destination_nodes] + ([self.end_node] if self.end_node is not None else [])
+            raise ValueError(
+                "end_node must be given if and only if end_mode is 'fixed'"
+            )
+        nodes = [self.start_node, *self.destination_nodes] + (
+            [self.end_node] if self.end_node is not None else []
+        )
         if len(set(nodes)) != len(nodes):
             dup = sorted({n for n in nodes if nodes.count(n) > 1})
             raise ValueError(f"snapped points must be distinct; duplicate nodes: {dup}")
@@ -74,7 +81,9 @@ class CostMatrix:
 
     nodes: tuple[int, ...]
     matrix: np.ndarray  # (N, N) float64, diagonal 0
-    legs: Mapping[tuple[int, int], tuple[int, ...]]  # (i, j) -> node path; only finite pairs
+    legs: Mapping[
+        tuple[int, int], tuple[int, ...]
+    ]  # (i, j) -> node path; only finite pairs
 
     def __post_init__(self):
         n = len(self.nodes)
