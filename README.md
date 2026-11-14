@@ -9,8 +9,16 @@ cd backend
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-uvicorn main:app --reload --port 8000
+cp .env.example .env    # then set JWT_SECRET_KEY: python -c "import secrets; print(secrets.token_urlsafe(32))"
+uvicorn main:app --reload --port 8000 --env-file .env
 ```
+
+The backend refuses to start without `JWT_SECRET_KEY`. Users are stored in SQLite at `data/app.db` (created on first start;
+override with `MARS_DATABASE_URL`).
+
+Auth: `POST /api/auth/register` (JSON: `email`, `password`, `body_mass_kg`, `birth_year`), `POST /api/auth/login`
+(form fields `username` = email, `password`; returns a Bearer token), `GET`/`PATCH /api/users/me` (needs
+`Authorization: Bearer <token>`). In http://localhost:8000/docs use the "Authorize" button to log in.
 
 API docs: http://localhost:8000/docs
 

@@ -71,6 +71,15 @@ class Settings:
     tile_sources: dict = field(default_factory=lambda: dict(TILE_SOURCES))
     risk_colors: dict = field(default_factory=lambda: dict(RISK_COLORS))
     poi_sample_radius_km: float = 2.0
+    # Auth. No default secret: create_app refuses to start without JWT_SECRET_KEY.
+    jwt_secret_key: str | None = field(default_factory=lambda: os.environ.get("JWT_SECRET_KEY"))
+    jwt_algorithm: str = "HS256"
+    access_token_expire_minutes: int = 60
+
+    @property
+    def database_url(self) -> str:
+        """MARS_DATABASE_URL, else a SQLite file in the (gitignored) data folder."""
+        return os.environ.get("MARS_DATABASE_URL", f"sqlite:///{self.data_dir / 'app.db'}")
 
     @property
     def raw_dir(self) -> Path:

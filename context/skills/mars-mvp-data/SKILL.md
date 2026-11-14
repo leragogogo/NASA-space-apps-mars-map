@@ -435,6 +435,13 @@ Use tiny hand-built graphs:
 - a fixed end that can't be reached (error)
 - a total weight that matches the sum of the unscaled legs
 
+## 10a. Authentication (JWT + SQLite)
+- **Endpoints:** `POST /api/auth/register` (JSON: `email`, `password` (no length check), `body_mass_kg` 30-250, `birth_year` from 1900 to the current year (no age rule); 201 + user, 409 if the email is taken), `POST /api/auth/login` (OAuth2 password **form**: the email goes in `username`; returns `{access_token, token_type: "bearer"}`; 401 with the same message for an unknown email and a wrong password), `GET /api/users/me` and `PATCH /api/users/me` (Bearer token; PATCH changes only the fields sent).
+- **Protected endpoints:** only `/api/users/me` for now; `POST /api/route` should take `Depends(get_current_user)` once it exists. Layer and tile endpoints stay public.
+- **Code:** `app/db/{models,session}.py` (SQLAlchemy 2.x, `User` table, one engine per app on `app.state`, tables created in the lifespan, no migrations yet), `app/auth/{security,service,dependencies}.py` (Argon2 via pwdlib, HS256 tokens via PyJWT with `sub` = user id and `exp`, `get_current_user`), `app/schemas/auth.py`, `app/api/routes/{auth,users}.py`.
+- **Config:** `JWT_SECRET_KEY` is required (the app refuses to start without it; `backend/.env.example`). Database: `MARS_DATABASE_URL`, default `sqlite:///<data_dir>/app.db` (gitignored with `data/`). Token lifetime 60 min (`Settings.access_token_expire_minutes`). No refresh tokens, logout, password reset or rate limiting yet.
+- **Body mass and birth year are stored, not yet used by the router.** `references/edge-cost-model.md` has `body_mass_kg` for the astronaut profile, but edge costs are computed per profile at graph build time, so using each user's mass is a separate change. Age is not modelled (no data to calibrate it).
+
 ## 11. Development rules (all agents)
 These apply to every agent and every change.
 
