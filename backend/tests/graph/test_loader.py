@@ -50,6 +50,14 @@ def test_changed_profile_parameters_make_the_graph_stale(fixture_settings):
     assert len(warnings) == 1 and "other profile parameters" in warnings[0] and "python -m app.graph" in warnings[0]
 
 
+def test_a_changed_rsl_buffer_makes_the_graph_stale(fixture_settings):
+    from dataclasses import replace
+    from app.graph.loader import staleness_warnings
+    ctx = _fresh_context(fixture_settings)
+    warnings = staleness_warnings(ctx, replace(fixture_settings, rsl_buffer_m=750.0))
+    assert len(warnings) == 1 and "RSL buffer" in warnings[0] and "python -m app.graph" in warnings[0]
+
+
 def test_a_different_grid_makes_the_graph_stale(fixture_settings):
     from dataclasses import replace
     from app.graph.loader import staleness_warnings

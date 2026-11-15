@@ -83,7 +83,7 @@ def test_graph_nodes_carry_relief_and_weather(inputs, graph):
 def _query(grid, profile, **kw):
     node = lambda lon, lat: int(grid.node_id(*grid.lonlat_to_rc(lon, lat)))  # noqa: E731
     return RouteQuery(profile=profile, start_node=node(-71.5, -13.0),
-                      destination_nodes=(node(-69.0, -11.0), node(-70.5, -10.5)), time_limit_s=1,
+                      destination_nodes=(node(-69.0, -10.97), node(-70.5, -10.5)), time_limit_s=1,
                       season=WINTER, **kw)
 
 
@@ -166,8 +166,8 @@ def real():
 def test_real_graph_has_the_expected_shape(real):
     _, inputs, data, _ = real
     assert inputs.grid.shape == (1073, 1200) and data.n_edges > 10_000_000
-    assert (data.cost(ProfileId.ASTRONAUT) < np.inf).mean() > 0.95  # 96.6 % of edges are below the 20 deg limit
-    assert (data.cost(ProfileId.CAR) < np.inf).mean() > 0.97  # 98.7 % are below the 25 deg limit
+    assert (data.cost(ProfileId.ASTRONAUT) < np.inf).mean() > 0.90  # 91 % of edges: the map slope (8.5 % of cells are above 20 deg) now blocks too, not only the travel gradient
+    assert (data.cost(ProfileId.CAR) < np.inf).mean() > 0.93  # 94 % of edges: map slope above 25 deg (3.8 % of cells) is blocked as well
 
 
 @real_only
@@ -198,8 +198,16 @@ def test_real_route_over_the_real_graph(real, profile):
 def test_real_car_is_faster_than_the_astronaut(real):
     _, inputs, _, rg = real
     node = lambda lon, lat: int(inputs.grid.node_id(*inputs.grid.lonlat_to_rc(lon, lat)))  # noqa: E731
-    a, b = node(-71.0, -12.0), node(-69.0, -11.0)
+    a, b = node(-71.0, -12.0), node(-69.0, -10.97)
     times = {p: plan_route(rg, RouteQuery(profile=p, start_node=a, destination_nodes=(b,),
                                           end_mode=EndMode.ROUND_TRIP, time_limit_s=1)).resources["time_s"]
              for p in PROFILES}
     assert times[ProfileId.CAR] < times[ProfileId.ASTRONAUT]
+
+
+def test_cli_records_the_configured_rsl_buffer(synthetic_settings, tmp_path):
+    cfg = tmp_path / "cfg.yaml"
+    cfg.write_text("hazards:\n  rsl_buffer_m: 750\n")
+    out = tmp_path / "g.npz"
+    assert graph_cli(["--data-dir", str(synthetic_settings.data_dir), "--config", str(cfg), "--out", str(out)]) == 0
+    assert GraphData.read_meta(out)["build_params"]["rsl_buffer_m"] == 750.0

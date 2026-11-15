@@ -30,7 +30,7 @@ def test_the_shipped_file_loads_and_lists_every_model_parameter(shipped):
 
 def test_the_shipped_file_starts_unconfirmed_so_the_placeholders_are_visible():
     assert set(load_settings().unconfirmed) == {"slope_classes", "profiles.astronaut", "profiles.car", "capacities",
-                                                "weather.risk_bins"}
+                                                "weather.risk_bins", "hazards"}
 
 
 def test_the_shipped_values_equal_the_built_in_defaults_when_nothing_was_changed():
@@ -170,7 +170,7 @@ def test_bad_confirmation_entries_are_rejected(tmp_path, shipped, entry, message
 
 def test_a_section_without_a_confirmation_entry_counts_as_unconfirmed(tmp_path):
     assert set(load_settings(write(tmp_path, {})).unconfirmed) == {"slope_classes", "profiles.astronaut", "profiles.car",
-                                                                    "capacities", "weather.risk_bins"}
+                                                                    "capacities", "weather.risk_bins", "hazards"}
 
 
 # ------------------------------------------------------------------ request limits and weather thresholds
@@ -214,3 +214,31 @@ def test_bad_limits_and_thresholds_are_rejected(tmp_path, shipped, change, messa
     change(shipped)
     with pytest.raises(ConfigError, match=message):
         load_settings(write(tmp_path, shipped))
+
+
+def test_hazards_section_sets_the_rsl_buffer(tmp_path, shipped):
+    shipped["hazards"] = {"rsl_buffer_m": 750}
+    assert load_settings(write(tmp_path, shipped)).rsl_buffer_m == 750.0
+    assert load_settings().rsl_buffer_m == 500.0  # the shipped value
+
+
+def test_negative_rsl_buffer_is_rejected(tmp_path, shipped):
+    shipped["hazards"] = {"rsl_buffer_m": -1}
+    with pytest.raises(ConfigError, match="hazards.rsl_buffer_m"):
+        load_settings(write(tmp_path, shipped))
+
+
+def test_terrain_parameters_reach_the_profile_models(tmp_path, shipped):
+    shipped["profiles"]["car"]["dune_blocked"] = False
+    shipped["profiles"]["astronaut"]["roughness_weight"] = 0.0
+    astronaut, car = models_from_settings(load_settings(write(tmp_path, shipped)))
+    assert car.params.dune_blocked is False and astronaut.params.roughness_weight == 0.0
+
+
+@pytest.mark.parametrize("bad", [{"roughness_weight": -1}, {"roughness_ref_m": 0}, {"dune_penalty": 0.5},
+                                 {"rsl_blocked": "yes"}])
+def test_invalid_terrain_parameters_are_rejected(bad):
+    with pytest.raises(ValueError):
+        AstronautParams(**bad)
+    with pytest.raises(ValueError):
+        CarParams(**bad)

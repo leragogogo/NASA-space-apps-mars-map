@@ -26,6 +26,8 @@ Layer endpoints: `/api/get-layer-one` (imagery sources), `/api/get-layer-two` (r
 `/api/get-layer-three` (points of interest, `?category=`), `/api/get-layer-four?season=winter` (dust-storm risk),
 `/api/tiles/{source}/{z}/{row}/{col}`. A layer whose data is missing answers 503 with the script to run.
 
+Route: `POST /api/route` (login required). Minimal body `{"start": {"lon": .., "lat": ..}, "end": {"lon": .., "lat": ..}}`; `profile` is `auto` (default), `astronaut` or `car`; add `destinations` for a multi-stop route (visited in the order given). The walker's oxygen and water estimates use the logged-in user's body mass. The response's `mode` says which profile was chosen and why.
+
 Tests (pytest is in `requirements.txt`; tests mirror the code in `tests/<module>/`, real-data checks skip when `data/` is missing):
 
 ```bash
@@ -40,7 +42,10 @@ npm install
 npm run dev
 ```
 
-App: http://localhost:5173 — requests to `/api/*` are proxied to the backend.
+App: http://localhost:5173 — requests to `/api/*` are proxied to the backend (`MARS_API_URL=http://localhost:8001 npm run dev`
+to use another backend port).
+
+Tests and lint: `npm test`, `npm run lint`. Details: `frontend/README.md`.
 
 ## Data
 

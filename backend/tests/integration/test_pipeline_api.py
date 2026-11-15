@@ -36,7 +36,7 @@ def route_body(profile="astronaut", **extra) -> dict:
 
 def real_body(profile="astronaut", **extra) -> dict:
     return {"profile": profile, "start": {"lon": -71.0, "lat": -12.0},
-            "destinations": [{"lon": -69.0, "lat": -11.0}, {"lon": -70.5, "lat": -10.5}],
+            "destinations": [{"lon": -69.0, "lat": -10.97}, {"lon": -70.5, "lat": -10.5}],
             "season": "winter", "time_limit_s": 1, **extra}
 
 

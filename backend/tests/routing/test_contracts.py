@@ -47,3 +47,10 @@ def test_time_limit_clamp():
     assert lim.clamp_time_limit(None) == DEFAULT_TIME_LIMIT_S == 10.0
     assert lim.clamp_time_limit(0.1) == 1.0
     assert lim.clamp_time_limit(999) == 30.0
+
+
+def test_no_destinations_needs_a_fixed_end():
+    with pytest.raises(ValueError, match="at least one destination is required"):
+        RouteQuery(profile="car", start_node=0, destination_nodes=())
+    q = RouteQuery(profile="car", start_node=0, destination_nodes=(), end_mode=EndMode.FIXED, end_node=1)
+    assert q.point_nodes == (0, 1)

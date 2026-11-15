@@ -3,6 +3,7 @@
 d_m   horizontal distance: R * sqrt(dlat^2 + (cos(lat_mid) * dlon)^2), angles in radians
 dz_m  elev[dst] - elev[src]  (signed: the reverse edge has the opposite sign)
 Elevation comes from ReliefData.elev_m, the same array the slope overlay is derived from.
+Optional terrain: the larger map slope of the two end cells, and a dune / RSL flag when either end cell has one.
 """
 from __future__ import annotations
 
@@ -13,13 +14,14 @@ from app.layers.contracts import GridSpec
 
 
 def edge_geometry(grid: GridSpec, elev_m: np.ndarray, src: np.ndarray, dst: np.ndarray,
-                  roughness_m: np.ndarray | None = None) -> EdgeGeometry:
+                  roughness_m: np.ndarray | None = None, slope_deg: np.ndarray | None = None,
+                  dune: np.ndarray | None = None, rsl: np.ndarray | None = None) -> EdgeGeometry:
     """Geometry of the edges (src[i] -> dst[i]). Edges touching nodata must be dropped first
     (enumerate_edges does this from the valid mask); a NaN elevation raises ValueError."""
-    if elev_m.shape != grid.shape:
-        raise ValueError(f"elev_m shape {elev_m.shape} != grid shape {grid.shape}")
-    if roughness_m is not None and roughness_m.shape != grid.shape:
-        raise ValueError(f"roughness_m shape {roughness_m.shape} != grid shape {grid.shape}")
+    for name, arr in (("elev_m", elev_m), ("roughness_m", roughness_m), ("slope_deg", slope_deg),
+                      ("dune", dune), ("rsl", rsl)):
+        if arr is not None and arr.shape != grid.shape:
+            raise ValueError(f"{name} shape {arr.shape} != grid shape {grid.shape}")
     src, dst = np.asarray(src), np.asarray(dst)
     if src.shape != dst.shape or src.ndim != 1:
         raise ValueError("src and dst must be 1-D arrays of the same length")
@@ -38,4 +40,10 @@ def edge_geometry(grid: GridSpec, elev_m: np.ndarray, src: np.ndarray, dst: np.n
     d_m = grid.radius_m * np.hypot(dlat, np.cos((lat_s + lat_d) / 2.0) * dlon)
 
     rough = None if roughness_m is None else roughness_m.astype(np.float64).ravel()[dst]
-    return EdgeGeometry(d_m=d_m, dz_m=z_dst - z_src, roughness_m=rough)
+    terrain = None
+    if slope_deg is not None:
+        s = slope_deg.astype(np.float64).ravel()
+        terrain = np.maximum(s[src], s[dst])
+    either = lambda mask: None if mask is None else (mask.ravel()[src] | mask.ravel()[dst])  # noqa: E731
+    return EdgeGeometry(d_m=d_m, dz_m=z_dst - z_src, roughness_m=rough, terrain_slope_deg=terrain,
+                        dune=either(dune), rsl=either(rsl))

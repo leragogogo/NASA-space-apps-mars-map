@@ -30,6 +30,13 @@ routing:
   min_time_limit_s: 1
   max_time_limit_s: 30
 
+hazards:
+  # RSL sites (recurring slope lineae, points in the POI layer) are candidate Special Regions (planetary
+  # protection): every cell within this distance is impassable for profiles with rsl_blocked: true.
+  # Dune fields (polygons) are handled per profile below (dune_blocked / dune_penalty).
+  # Part of the graph fingerprint: a startup build or `python -m app.graph` rebuilds the graph after changing it.
+  rsl_buffer_m: 500
+
 poi:
   # Points of interest within this distance of a point are reported when sampling a location.
   sample_radius_km: 2.0
@@ -76,6 +83,8 @@ slope_classes:
 # cost = length * (1 + (|slope| / hard_limit)^p) * [alpha * time_ratio + beta * energy_ratio]; slopes beyond
 # hard_limit are impassable. Body mass is NOT here for the route: the astronaut's body_mass_kg is only the
 # reference mass of the stored graph, each user's own mass (from their account) is used for the estimates.
+# Terrain terms: cost x roughness factor x dune factor; impassable where the map slope of either end cell
+# exceeds hard_limit_deg, or on blocked hazards (edge-cost-model.md section 4a).
 profiles:
   astronaut:
     hard_limit_deg: 20.0         # NASA Artemis suit capability (lunar); see slope_classes
@@ -95,6 +104,11 @@ profiles:
     h_cool_j_per_g: 2400.0       # heat removed per gram of cooling water (J/g)
     rq: 0.85                     # respiratory quotient
     o2_kj_per_l: 20.1            # energy per litre of oxygen consumed (kJ/L)
+    roughness_weight: 0.5        # cost x (1 + weight * min(roughness / roughness_ref_m, 3))
+    roughness_ref_m: 3.0         # ~90th percentile of DEM roughness in the demo area (m)
+    dune_blocked: false          # walking on sand is slow but possible
+    dune_penalty: 1.5            # cost factor on dune-field edges when not blocked
+    rsl_blocked: true
   car:
     hard_limit_deg: 25.0         # Apollo rover design maximum (lunar); see slope_classes
     alpha: 0.5
@@ -111,6 +125,11 @@ profiles:
     crew_o2_g_per_s: 0.0097      # per person, seated in a pressurised cabin
     crew_co2_g_per_s: 0.0116
     crew_water_g_per_s: 0.035
+    roughness_weight: 1.0
+    roughness_ref_m: 3.0
+    dune_blocked: true           # loose sand: the rover may bog down
+    dune_penalty: 1.0
+    rsl_blocked: true
 
 # Which sections the product owner has signed off. The API logs the unconfirmed ones at startup.
 # To confirm a section: check its numbers, set status to confirmed, and name the source (a document, a
@@ -121,3 +140,4 @@ confirmation:
   profiles.car:       {status: placeholder, source: "hard_limit_deg: as slope_classes. All other parameters are engineering guesses."}
   capacities:         {status: placeholder, source: ""}
   weather.risk_bins:  {status: placeholder, source: ""}
+  hazards:            {status: placeholder, source: "RSL buffer and dune rules: engineering guesses (decided with the team 2026-11-15)."}

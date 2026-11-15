@@ -56,3 +56,10 @@ def test_missing_dem_raises_with_fix(tmp_path):
     assert "--only dem" in ex.value.message and ex.value.layer == "relief"
     settings = Settings(data_dir=tmp_path)
     assert grid_for(settings).shape == (1073 // settings.grid_coarsen, 1200 // settings.grid_coarsen)  # default DEM shape
+
+
+def test_ingest_computes_roughness_on_the_same_grid(fixture_settings):
+    d = ingest_relief(fixture_settings)
+    assert d.roughness_m is not None and d.roughness_m.dtype == np.float32
+    assert d.roughness_m.shape == d.grid.shape
+    assert (np.isnan(d.roughness_m) == ~d.valid).all() and (d.roughness_m[d.valid] >= 0).all()

@@ -45,8 +45,9 @@ def test_car_round_trip_visits_everything(client):
     r = client.post("/api/route", json=body())
     assert r.status_code == 200
     d = r.json()
-    assert sorted(d["stop_order"]) == [0, 1, 2] and d["dropped"] == []
-    assert d["total_weight"] == pytest.approx(12.0)
+    # stops in the order given (nodes 3, 1, 4), not reordered: 0->3 (3) + 3->1 (2) + 1->4 (7) + 4->0 (4)
+    assert d["stop_order"] == [0, 1, 2] and d["dropped"] == []
+    assert d["total_weight"] == pytest.approx(16.0)
     assert d["path"]["type"] == "LineString"
     assert d["path"]["coordinates"][0] == d["path"]["coordinates"][-1]  # round trip
     assert d["legs"][0]["from"] == "start" and d["legs"][-1]["to"] == "start"
@@ -150,3 +151,11 @@ def test_a_graph_built_with_other_parameters_falls_back_to_the_reference_mass(cl
 def test_the_car_never_uses_body_mass(client):
     d = client.post("/api/route", json=body("car", dests=(1,))).json()
     assert d["body_mass_kg"] is None and d["warnings"] == []
+
+
+def test_auto_is_the_default_profile_and_reports_the_choice(client):
+    b = body(dests=(1,))
+    b.pop("profile", None)
+    d = client.post("/api/route", json=b).json()
+    assert d["mode"]["requested"] == "auto" and d["profile"] == d["mode"]["chosen"]
+    assert {o["profile"] for o in d["mode"]["options"]} == {"astronaut", "car"}

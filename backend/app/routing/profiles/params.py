@@ -29,6 +29,18 @@ def _check_weights(alpha: float, beta: float, p: float, limit_deg: float) -> Non
         raise ValueError("hard_limit_deg must be in (0, 90)")
 
 
+def _check_terrain(p) -> None:
+    if p.roughness_weight < 0:
+        raise ValueError("roughness_weight must be >= 0")
+    if p.roughness_ref_m <= 0:
+        raise ValueError("roughness_ref_m must be > 0")
+    if p.dune_penalty < 1:
+        raise ValueError("dune_penalty must be >= 1 (it multiplies the cost)")
+    for name in ("dune_blocked", "rsl_blocked"):
+        if not isinstance(getattr(p, name), bool):
+            raise ValueError(f"{name} must be true or false")
+
+
 @dataclass(frozen=True)
 class AstronautParams:
     # TODO(product owner): confirm the slope limit. 20 deg is the Artemis suit's stated capability (lunar; NASA
@@ -54,6 +66,12 @@ class AstronautParams:
     h_cool_j_per_g: float = 2400.0  # latent heat of water, sublimator cooling (approximate)
     rq: float = 0.85  # respiratory quotient
     o2_kj_per_l: float = 20.1  # energy per litre of O2 consumed
+    # Terrain and hazards (edge-cost-model.md section 4a). Placeholders.
+    roughness_weight: float = 0.5  # cost x (1 + weight * min(roughness / ref, 3))
+    roughness_ref_m: float = 3.0   # ~90th percentile of DEM roughness in the demo area
+    dune_blocked: bool = False     # walking on sand is slow but possible
+    dune_penalty: float = 1.5      # cost factor on dune-field edges when they are not blocked
+    rsl_blocked: bool = True       # RSL sites: candidate Special Regions (planetary protection)
 
     def __post_init__(self):
         _check_weights(self.alpha, self.beta, self.p, self.hard_limit_deg)
@@ -64,6 +82,7 @@ class AstronautParams:
         for name in ("suit_mass_kg", "gear_mass_kg", "p_suit_w", "o2_leak_g_per_s", "env_heat_w", "rq"):
             if getattr(self, name) < 0:
                 raise ValueError(f"{name} must be >= 0")
+        _check_terrain(self)
 
     @property
     def total_mass_kg(self) -> float:
@@ -92,6 +111,12 @@ class CarParams:
     crew_o2_g_per_s: float = 0.0097
     crew_co2_g_per_s: float = 0.0116
     crew_water_g_per_s: float = 0.035
+    # Terrain and hazards (edge-cost-model.md section 4a). Placeholders.
+    roughness_weight: float = 1.0  # rough ground hurts a wheeled vehicle more than a walker
+    roughness_ref_m: float = 3.0
+    dune_blocked: bool = True      # loose sand: the rover may bog down
+    dune_penalty: float = 1.0
+    rsl_blocked: bool = True
 
     def __post_init__(self):
         _check_weights(self.alpha, self.beta, self.p, self.hard_limit_deg)
@@ -105,3 +130,4 @@ class CarParams:
                 raise ValueError(f"{name} must be >= 0")
         if self.crew_n < 0:
             raise ValueError("crew_n must be >= 0")
+        _check_terrain(self)

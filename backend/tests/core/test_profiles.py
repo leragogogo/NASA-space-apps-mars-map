@@ -54,3 +54,14 @@ def test_check_edge_attrs_rejects_missing_extra_shape_dtype():
     attrs["cost"] = np.ones(3, dtype=int)
     with pytest.raises(ValueError, match="float"):
         check_edge_attrs(attrs, 3)
+
+
+def test_terrain_fields_default_to_none_and_are_validated():
+    g = EdgeGeometry(d_m=np.array([1.0, 2.0]), dz_m=np.zeros(2))
+    assert g.terrain_slope_deg is None and g.dune is None and g.rsl is None
+    g = EdgeGeometry(d_m=np.array([1.0, 2.0]), dz_m=np.zeros(2), terrain_slope_deg=[3, 40], dune=[0, 1], rsl=[1, 0])
+    assert g.terrain_slope_deg.dtype == np.float64 and g.dune.dtype == bool and g.dune.tolist() == [False, True]
+    with pytest.raises(ValueError, match="terrain_slope_deg"):
+        EdgeGeometry(d_m=np.array([1.0]), dz_m=np.zeros(1), terrain_slope_deg=[95.0])
+    with pytest.raises(ValueError, match="dune"):
+        EdgeGeometry(d_m=np.array([1.0]), dz_m=np.zeros(1), dune=[True, False])

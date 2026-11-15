@@ -92,6 +92,10 @@ class Settings:
     capacities: dict = field(default_factory=dict)
     reserve_margin: float = 0.2
     max_snap_distance_m: float = 1000.0
+    # Cells within this distance of an RSL site are impassable for profiles with rsl_blocked (hazards section of
+    # config/mars.yaml). Part of the graph fingerprint: a startup build or `python -m app.graph` rebuilds the graph
+    # after changing it.
+    rsl_buffer_m: float = 500.0
     # Build the routing graph in the background when the API starts and it is missing or stale (routing section of
     # config/mars.yaml; off here so tests and tools that start an app do not build one by accident).
     build_graph_on_startup: bool = False

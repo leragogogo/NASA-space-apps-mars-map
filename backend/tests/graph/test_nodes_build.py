@@ -6,9 +6,10 @@ import pytest
 from app.core.resources import EDGE_ATTRS, PROFILES, attr_key
 from app.graph.build import BuildConfig, build_graph, expected_fingerprint, hash_sources
 from app.graph.nodes import build_node_table, weather_conf_key, weather_risk_key
-from app.layers.contracts import SEASONS, Confidence, LayerDataError, RiskLevel
+from app.layers.contracts import SEASONS, Confidence, LayerDataError, PoiData, PoiFeature, PoiKind, RiskLevel
 from app.layers.fakes import fake_grid, fake_inputs, fake_relief, fake_weather
 from app.layers.relief.slope import slope_deg
+from app.routing.profiles import default_models
 from tests.graph.stubs import stub_models
 
 
@@ -56,7 +57,7 @@ def test_build_graph_produces_valid_graph_data():
     g = build_graph(inputs, stub_models())
     g.validate()
     assert g.grid == inputs.grid and g.formula_version == "astronaut=stub-1;car=stub-1"
-    assert g.build_params == {"neighbours": 8} and g.source_hashes == {}
+    assert g.build_params == {"neighbours": 8, "rsl_buffer_m": 500.0} and g.source_hashes == {}
     rows, cols = inputs.grid.shape
     assert g.n_edges == 2 * (rows * (cols - 1) + cols * (rows - 1) + 2 * (rows - 1) * (cols - 1))
     assert set(g.edge_arrays) == {attr_key(p, a) for p in PROFILES for a in EDGE_ATTRS}
@@ -88,7 +89,7 @@ def test_four_neighbourhood_has_fewer_edges():
     inputs = small_inputs()
     g8 = build_graph(inputs, stub_models(), BuildConfig(neighbours=8))
     g4 = build_graph(inputs, stub_models(), BuildConfig(neighbours=4))
-    assert g4.n_edges < g8.n_edges and g4.build_params == {"neighbours": 4}
+    assert g4.n_edges < g8.n_edges and g4.build_params == {"neighbours": 4, "rsl_buffer_m": 500.0}
 
 
 def test_source_hashes_and_fingerprint(tmp_path):
@@ -112,3 +113,22 @@ def test_fingerprint_changes_with_formula_version_and_neighbours():
     models[0].formula_version = "stub-2"
     assert expected_fingerprint(inputs, models) != base
     assert expected_fingerprint(inputs, stub_models(), BuildConfig(neighbours=4)) != base
+
+
+def test_build_graph_blocks_every_edge_touching_an_rsl_buffer():
+    g = fake_grid(8, 10)
+    lon, lat = float(g.lon_centers()[5]), float(g.lat_centers()[4])
+    rsl = PoiFeature(id="t:0:0", kind=PoiKind.RSL, geometry={"type": "Point", "coordinates": [lon, lat]}, source="t/0")
+    inputs = dataclasses.replace(fake_inputs(g, relief_kind="flat"), poi=PoiData(features=(rsl,)))
+    data = build_graph(inputs, default_models(), BuildConfig(rsl_buffer_m=10.0))
+    node = int(g.node_id(4, 5))
+    touching = (data.src == node) | (data.dst == node)
+    for p in PROFILES:
+        assert np.isinf(data.cost(p)[touching]).all() and np.isfinite(data.cost(p)[~touching]).all()
+    assert data.build_params["rsl_buffer_m"] == 10.0
+
+
+def test_the_rsl_buffer_is_part_of_the_fingerprint():
+    inputs = small_inputs()
+    assert expected_fingerprint(inputs, stub_models(), BuildConfig(rsl_buffer_m=100.0)) != \
+           expected_fingerprint(inputs, stub_models(), BuildConfig())

@@ -16,14 +16,19 @@ from app.core.resources import EDGE_ATTRS, ProfileId
 
 @dataclass(frozen=True, eq=False)
 class EdgeGeometry:
-    """Geometry of m directed edges u -> v (signed: uphill and downhill differ).
+    """Geometry and terrain of m directed edges u -> v (signed: uphill and downhill differ).
 
     d_m: horizontal distance (> 0). dz_m = elev[v] - elev[u]. roughness_m optional (at v).
+    terrain_slope_deg optional: the larger map slope (ReliefData.slope_deg) of the two end cells.
+    dune / rsl optional (bool): either end cell lies in a dune field / within an RSL site's buffer.
     """
 
     d_m: np.ndarray
     dz_m: np.ndarray
     roughness_m: np.ndarray | None = None
+    terrain_slope_deg: np.ndarray | None = None
+    dune: np.ndarray | None = None
+    rsl: np.ndarray | None = None
 
     def __post_init__(self):
         d = np.asarray(self.d_m, dtype=np.float64)
@@ -39,9 +44,27 @@ class EdgeGeometry:
             rough = np.asarray(self.roughness_m, dtype=np.float64)
             if rough.shape != d.shape:
                 raise ValueError("roughness_m must have the same length as d_m")
+        terrain = None
+        if self.terrain_slope_deg is not None:
+            terrain = np.asarray(self.terrain_slope_deg, dtype=np.float64)
+            if terrain.shape != d.shape:
+                raise ValueError("terrain_slope_deg must have the same length as d_m")
+            if not np.isfinite(terrain).all() or (terrain < 0).any() or (terrain > 90).any():
+                raise ValueError("terrain_slope_deg must be finite and within 0..90")
+        flags = {}
+        for name in ("dune", "rsl"):
+            value = getattr(self, name)
+            if value is not None:
+                value = np.asarray(value, dtype=bool)
+                if value.shape != d.shape:
+                    raise ValueError(f"{name} must have the same length as d_m")
+            flags[name] = value
         object.__setattr__(self, "d_m", d)
         object.__setattr__(self, "dz_m", dz)
         object.__setattr__(self, "roughness_m", rough)
+        object.__setattr__(self, "terrain_slope_deg", terrain)
+        object.__setattr__(self, "dune", flags["dune"])
+        object.__setattr__(self, "rsl", flags["rsl"])
 
     def __len__(self) -> int:
         return self.d_m.shape[0]

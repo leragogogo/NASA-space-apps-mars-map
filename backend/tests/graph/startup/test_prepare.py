@@ -82,3 +82,18 @@ def test_workers_starting_together_build_once(settings, monkeypatch):
     assert len(results) == 4 and len(builds) == 1  # one built, three waited and loaded the result
     assert sorted(built for _, built in results) == [False, False, False, True]
     assert leftovers(settings) == []
+
+
+def test_the_startup_build_passes_the_rsl_buffer(settings, monkeypatch):
+    import app.graph.startup.prepare as prepare
+    seen = {}
+
+    def fake_ensure(path, inputs, models, config):
+        seen["config"] = config
+        return "data", True
+
+    monkeypatch.setattr(prepare, "load_all", lambda s: object())
+    monkeypatch.setattr(prepare, "ensure_graph", fake_ensure)
+    monkeypatch.setattr(prepare, "build_routing_context", lambda data: "ctx")
+    assert prepare_routing_context(replace(settings, rsl_buffer_m=750.0)) == ("ctx", True)
+    assert seen["config"].rsl_buffer_m == 750.0
