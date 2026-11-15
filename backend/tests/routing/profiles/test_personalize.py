@@ -19,11 +19,11 @@ def geom(gradients, d=400.0):
 
 @pytest.fixture(scope="module")
 def graph_and_path():
-    """A graph built with the real profile models over a gentle ramp, and a walkable path along its top row."""
+    """A graph built with the real profile models over a gentle ramp, and a walkable path along its fourth row (the fake POI put an RSL buffer on the top row)."""
     grid = fake_grid(8, 10)
     data = build_graph(fake_inputs(grid, relief_kind="ramp"), default_models(), BuildConfig())
     rg = RoutingGraph.from_graph_data(data)
-    return data, rg, list(range(grid.ncols))  # nodes 0..9: the north row, west to east
+    return data, rg, list(range(3 * grid.ncols, 4 * grid.ncols))  # the fourth row, west to east
 
 
 # ------------------------------------------------------------------ the model: mass changes resources, not the route

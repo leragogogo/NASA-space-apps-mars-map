@@ -53,7 +53,7 @@ Default grid: the 200 m DEM (1200 x 1073) at its native resolution (1,287,600 no
 
 ### Relief (`app/layers/relief/`)
 - Reads: `data/raw/dem/dem_blend200m_aoi.tif` (float32 m, nodata -32767 or NaN).
-- `ReliefData`: `grid`, `elev_m` float32 (NaN = nodata), `valid` bool, `slope_deg` float32 (node slope), optional `roughness_m` float32 (std-dev of elevation in a 3x3 window).
+- `ReliefData`: `grid`, `elev_m` float32 (NaN = nodata), `valid` bool, `slope_deg` float32 (node slope), optional `roughness_m` float32 (now produced by `ingest_relief`, `app/layers/relief/roughness.py`: deviation from the plane through the 4 neighbours). POI dune polygons and RSL points become graph hazard masks inside the graph builder (`app/graph/hazards/`), with no change to `PoiData`.
 - Resample to the grid with a NaN-aware block mean. Compute `slope_deg` **once**, from the resampled `elev_m` with central differences using the metric spacing. The graph builder derives signed edge gradients from the same `elev_m`. Display slope and routing slope therefore share one source.
 - Caveat: at 200-400 m the slope underestimates local steepness.
 - Service: slope-class overlay PNG + bounds (classes from `config/mars.yaml`: 0-5 easy walk, 5-15 walkable, 15-20 walkable with caution, 20-25 vehicle only, >25 impassable), elevation at a point, hillshade tiles (served like imagery).
@@ -135,6 +135,6 @@ Every ingestion module's definition of done: its real `ingest` passes `validate_
 | H. API routers + schemas | 0 | fakes |
 | I. frontend | endpoint table above | mocked JSON |
 
-Packages A-D are done: each layer has `ingest.py` (contract output) and `service.py` (client format, class `...Getter`). The relief `slope_deg` is computed once on the grid and shared by the overlay and the graph. Not implemented: optional `roughness_m` and `nearest_poi_*` arrays.
+Packages A-D are done: each layer has `ingest.py` (contract output) and `service.py` (client format, class `...Getter`). The relief `slope_deg` is computed once on the grid and shared by the overlay and the graph. Not implemented: the optional `nearest_poi_*` arrays.
 
 `app.layers.inputs.load.load_all(settings)` is the integration point for the graph: it runs the three ingests on the shared grid and `validate_inputs`. At the native 200 m grid the graph has 1.29 M nodes and 10.3 M edges and plans routes in seconds, because the routing engine keeps everything in NumPy arrays and runs SciPy's Dijkstra (`app/routing/graph.py`). The ingestion `source_files` entries (`path:sha256`) are what the graph fingerprint hashes, so a changed source file marks a saved graph stale.

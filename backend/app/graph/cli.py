@@ -45,6 +45,7 @@ def main(argv: list[str] | None = None) -> int:
                              weather=fake_weather(grid), poi=fake_poi(grid))
         models = stub_models()
         out = args.out or FAKE_GRAPH_PATH
+        config = BuildConfig(neighbours=args.neighbours)
     else:
         overrides = {k: v for k, v in (("data_dir", args.data_dir), ("grid_coarsen", args.coarsen)) if v is not None}
         try:
@@ -58,9 +59,10 @@ def main(argv: list[str] | None = None) -> int:
             print(f"cannot build the graph: {ex}", file=sys.stderr)
             return 2
         models = models_from_settings(settings)  # the parameters of the configuration file
+        config = BuildConfig(neighbours=args.neighbours, rsl_buffer_m=settings.rsl_buffer_m)
         out = args.out or settings.graph_file  # the file the app loads at startup
     t0 = time.time()
-    data, built = ensure_graph(out, inputs, models, BuildConfig(neighbours=args.neighbours), force=args.force)
+    data, built = ensure_graph(out, inputs, models, config, force=args.force)
     verb = "built" if built else "up to date (loaded)"
     print(f"{verb}: {out}  nodes={data.grid.n_nodes:,} edges={data.n_edges:,} "
           f"formula={data.formula_version} in {time.time() - t0:.1f}s")

@@ -246,7 +246,7 @@ requirements.txt                   venv packages (requests, pandas, numpy, pillo
 - Four independent layer endpoints (base imagery, relief, points of interest, weather) plus one route endpoint: `POST /api/route`, a **multi-destination** route for a profile (`astronaut` | `car`; replaces the earlier `walker` | `vehicle` naming). Full spec in section 10.
 - **Layer ingestion modules** (`backend/app/layers/<layer>/`): each turns `data/raw/` files into normalised, validated data aligned to one shared `GridSpec` (`ingest.py`), plus a client-facing half (`service.py`). The graph builder consumes only that output and never reads `data/raw/` itself. Imagery is tile-serving only; the graph does not use it. **Contract, per-layer fields, fixtures and parallel work packages: `references/layer-ingestion.md`.**
 - **Master graph** (`backend/app/graph/`): one directed graph built offline from the layer getters' data and stored as **flat NumPy arrays** (`src`, `dst`, and one array per profile and attribute), not as Python objects. Every directed edge carries, **for each profile, a routing `cost` plus resource consumption** (time, O2, CO2, water, energy). Model and formulas: `references/edge-cost-model.md`. Nodes carry elevation, slope, nearby points of interest, and the four seasonal risk values with their confidence. **Season is a query parameter, not part of the graph or the edge weights.** The graph is built on the relief getter's **native 200 m grid** (1,287,600 nodes, 10,287,166 directed edges with 8 neighbours); `--coarsen N` averages it down if ever needed. Persist the built graph under `data/graph/` (gitignored). (This supersedes the earlier "implicit numpy grid + A*" decision.)
-- **Routing engine** (`backend/app/routing/`): per-profile cost formulas, the SciPy cost matrix and the OR-Tools solver. Slope classes (0-5 easy, 5-15 walkable, 15-20 walkable with caution, 20-25 vehicle only, >25 impassable) are unconfirmed by the product owner, so keep them configurable (`config/mars.yaml`).
+- **Routing engine** (`backend/app/routing/`): per-profile cost formulas, the SciPy cost matrix, stops in input order (`sequence/`). Slope classes (0-5 easy, 5-15 walkable, 15-20 walkable with caution, 20-25 vehicle only, >25 impassable) are unconfirmed by the product owner, so keep them configurable (`config/mars.yaml`).
 - **Caveats for routing:** weather risk is almost uniform inside the AOI (1 deg cells within +-10 %), so it acts as a season-wide warning, not a route discriminator. The 200 m DEM underestimates local slope.
 - **Tiles** (`backend/app/tiles/`): serve `data/raw/tiles/<label>/<z>/<row>/<col>.<ext>` straight from disk (static files). No upstream fetching; a missing tile returns 404 or a transparent tile.
 
@@ -277,7 +277,7 @@ backend/
   app/layers/{base_imagery,relief,poi,weather}/   one ingestion module per layer (ingest.py + service.py); shared `contracts.py`, `fakes.py`, `validate.py` live in `app/layers/` (done)
   app/tiles/                    serves tiles from data/raw/tiles (static, no upstream calls)
   app/graph/                    master graph builder (offline) and loader (startup), see section 10
-  app/routing/                  profiles + weight formulas, cost matrix (SciPy Dijkstra on arrays), solver (OR-Tools), route assembly
+  app/routing/                  profiles + weight formulas, cost matrix (SciPy Dijkstra on arrays), stop order (input order), route assembly
   tests/
 frontend/src/
   api/                          the only place that talks to the backend
@@ -287,22 +287,23 @@ frontend/src/
 ```
 Step 0 is done: the shared contracts exist and are tested (see `references/layer-ingestion.md` section 7). Package G (routing engine) and package H (API controller: layer, tile and route endpoints) are done (`app/routing/`, `app/api/routes/`, see section 10 "Implementation"). The four layer modules (packages A-D) are done: `app/layers/<layer>/ingest.py` + `service.py`, plus `app/layers/inputs/load.py: load_all`. The graph (package F) is built from `load_all` with the profile formulas of `app/routing/profiles/`; layers, graph, routing engine and API are integrated and tested end to end (`tests/integration/test_graph_integration.py`, and `test_pipeline_api.py` through the HTTP endpoints). All other module folders are still empty placeholders (`.gitkeep`).
 
-## 10. Multi-destination routing (decided: SciPy Dijkstra on NumPy arrays + Google OR-Tools)
-A user picks a profile, a start, several destinations and optionally an end. The backend returns one continuous path that visits the reachable destinations in the best order it finds, and reports the ones it had to drop.
+## 10. Multi-destination routing (decided: SciPy Dijkstra on NumPy arrays; stops in the order the user gives)
+A user picks a profile (which may be `auto`, where the backend tries each profile and chooses), a start, several destinations and optionally an end; start + end alone (no destinations) is a point-to-point route. The backend returns one continuous path that visits the reachable destinations in the order the user entered them, and reports the ones it had to skip.
 - **`scipy.sparse.csgraph.dijkstra`** computes shortest paths on the terrain graph, which is held as NumPy arrays plus one CSR matrix per profile. (rustworkx was used first; its per-edge Python callback and per-edge Python objects made the 10 M-edge 200 m graph take 149 s and about 20 GB per plan.)
-- **OR-Tools** (`ortools.constraint_solver`) orders the stops.
+- The stops are visited in input order (`app/routing/sequence/`); OR-Tools (`app/routing/solver.py`) is no longer used for that.
 - Backend deps: `scipy` (Dijkstra, KD-tree), `numpy`, `ortools`. Checked with ortools 9.15.
 
 ### Profiles
 | Profile | Who | Hard limit (from the slope classes, configurable) |
 |---|---|---|
-| `astronaut` | walking EVA crew | slope > 20° → ∞ |
-| `car` | rover / vehicle | slope > 25° → ∞ |
+| `astronaut` | walking EVA crew | map slope of either end cell, or the travel slope, > 20° → ∞; blocked hazards too (edge-cost-model.md 4a) |
+| `car` | rover / vehicle | map slope of either end cell, or the travel slope, > 25° → ∞; blocked hazards too (edge-cost-model.md 4a) |
 
-- Profile ids are **`astronaut` and `car`** everywhere (graph keys, API, config).
+- Profile ids in the graph and config are **`astronaut` and `car`**; the API request also accepts `auto` (below).
 - Each profile has **its own cost formula**, which combines every relevant parameter: 3D distance, signed slope (uphill ≠ downhill), roughness, energy and so on. **Besides `cost`, each profile also stores per-edge resource consumption** (`time_s`, `o2_g`, `co2_g`, `water_g`, `energy_wh`). Formulas, units and parameters: `references/edge-cost-model.md`.
 - Weather risk is not in the cost: weights are precomputed and the season is a request parameter.
-- The formulas are **not confirmed by the product owner**. Keep them in one place (`app/routing/profiles.py`) with their constants in config, and record a `formula_version` in the saved graph.
+- Requests may also say `"profile": "auto"` (the default): the backend routes with both profiles and returns the one that reaches the most destinations, then the one with less oxygen per person (the rover's o2_g divided by its crew), then the faster one (`app/routing/modes/select.py`). `"auto"` is a request value, never a profile id in the graph.
+- The formulas are **not confirmed by the product owner**. Keep them in one place (the package `app/routing/profiles/`) with their constants in config, and record a `formula_version` in the saved graph.
 - `cost` is an abstract cost (flat-equivalent metres). Readable figures (time, O2, Wh) come from the stored resource attributes, summed per leg after solving.
 - Slope must come from the same array as the relief layer (section 9).
 
@@ -312,42 +313,43 @@ A user picks a profile, a start, several destinations and optionally an end. The
 - **One attribute set per profile on every edge:** `cost` (what routing minimises) plus the resources. Logical view per edge: `{"astronaut": {"cost": .., "o2_g": .., "water_g": ..}, "car": {...}}`; physically one array per `(profile, attribute)`, never a dict per edge. Compute all profiles with vectorised numpy over edge arrays, not one Python loop per edge.
 - **Impassable = `math.inf`.** If a profile can't use an edge, its `cost` (and resource attributes) are ∞. **Every edge has every attribute for every profile;** an edge is never left out for one profile, so all profiles share the same topology.
 - **`cost` and resources must be ≥ 0 and never NaN.** A downhill bonus must still leave a weight ≥ 0. Infinite-cost (impassable) edges are left out of the CSR matrix, so the search never uses them.
+- **Terrain and hazards:** edges also use the map slope of their end cells, roughness and the POI hazards (dune fields, RSL sites); formulas in `references/edge-cost-model.md` section 4a. `rsl_buffer_m` is a build parameter and part of the fingerprint.
 - **Inputs come only from the layer ingestion output (`GraphInputs`)**, never from `data/raw/` directly (`references/layer-ingestion.md`).
 - **Persist** to `data/graph/` (gitignored) as `graph.npz`:
   - node arrays (each length `n_nodes`): `lon`, `lat`, `elev_m`, `valid` (required), plus `slope_deg`, `nearest_poi_dist_m`, and the per-season weather as 1-D arrays `weather_risk_0..3` and `weather_conf_0..3` (`SEASONS` order)
   - `cost` is stored as float64 (the solver sums many of them); the resources as float32
   - edge arrays: `src`, `dst`, and for every profile `p` and attribute `a` an array named `p__a` (e.g. `astronaut__cost`, `astronaut__o2_g`, `car__energy_wh`)
-  - metadata (the "fingerprint"): format version, grid, `formula_version` (per profile), sha256 of every source file, build parameters (neighbourhood). A saved graph is stale when it no longer matches; `python -m app.graph` rebuilds only then (`--force` to override)
+  - metadata (the "fingerprint"): format version, grid, `formula_version` (per profile), sha256 of every source file, build parameters (neighbourhood, `rsl_buffer_m`). A saved graph is stale when it no longer matches; `python -m app.graph` rebuilds only then (`--force` to override)
 - The loader rebuilds only when the metadata no longer matches. It is not rebuilt on every start.
 
 ### Step 2: startup: `app/graph/loader.py` (FastAPI lifespan)
 - Load `graph.npz` once and build the `RoutingGraph` (`RoutingGraph.from_graph_data`): `src`/`dst` int32, per-profile `cost` float64 and resource arrays indexed by **edge id**, a sorted `src * n + dst` key array for edge-id lookup, and (lazily, per profile) a SciPy CSR matrix of the finite-cost edges.
 - **Startup build (`routing.build_graph_on_startup: true` in `config/mars.yaml`, on as shipped):** the API starts at once and prepares the graph in a background thread (`app/graph/startup/`): it loads `data/raw/` with `load_all`, then `ensure_graph` loads the saved graph when its fingerprint (grid, profile parameters, build options, hashes of the source files) still matches and otherwise builds and saves it. `POST /api/route` answers 503 "being prepared" until the thread finishes (`app.state.routing` is swapped in), and every other endpoint works meanwhile. A lock file (`graph.npz.lock`, holding the owner's pid and host) makes several workers build once; the others wait and load the result, and a lock whose owner process died (for example an out-of-memory kill) is taken over at once, any other lock after 30 minutes, and `graph.npz` is written atomically (temporary file, then rename). Missing data or a failed build leaves a 503 with the reason and the fix. With the flag off, a missing `graph.npz` is a 503 until `python -m app.graph` has been run. **Deployment notes:** the first start takes about a minute and about 4 GB of memory at peak (`graph.npz` is ~490 MB; later starts only check freshness and load it in ~10 s); `data/raw/` must already exist (`python scripts/download_data.py`, which is not automated) and `data/graph/` must be writable.
-- The loader's output is a `RoutingContext` (`app/graph/loader.py`): the `RoutingGraph` (`app/routing/graph.py`: arrays, `shortest_paths`, `trace_path`, `edge_id(s)`, `path_cost`, `path_resources`, `coords`) plus the KD-tree used by `app/routing/snap.py`. Routing codes against it.
+- The loader's output is a `RoutingContext` (`app/graph/loader.py`): the `RoutingGraph` (`app/routing/graph.py`: arrays, `shortest_paths`, `trace_path`, `edge_id(s)`, `path_cost`, `path_resources`, `coords`) plus the KD-tree used by `app/routing/snap.py` and one KD-tree per profile over the nodes that profile can leave (`RoutingContext.passable`), used by `snap`. Routing codes against it.
 - Keep every array as NumPy: nothing is stored per edge as a Python object (no cost lists, no per-edge callbacks).
 - Keep the lookup structures in app state:
   - node index → (lon, lat) from the arrays
-  - (lon, lat) → node index through a `scipy.spatial.cKDTree` built over the **valid** nodes only, in a local metric projection (scale lon by cos(lat))
+  - (lon, lat) → node index through a `scipy.spatial.cKDTree` built over the **valid** nodes only, in a local metric projection (scale lon by cos(lat)), plus one KD-tree per profile over the nodes that profile can leave (`RoutingContext.passable`), used by `snap`
 - The graph is read-only after startup, so it is safe to share across requests.
 
 ### Step 3: request handling: `POST /api/route`
 Request:
 ```json
 {
-  "profile": "astronaut",
+  "profile": "auto",              // "auto" (default) | "astronaut" | "car"
   "start": {"lon": -70.1, "lat": -11.5},
-  "destinations": [{"lon": -69.8, "lat": -11.2}, {"lon": -70.4, "lat": -12.0}],
-  "end_mode": "round_trip",        // "round_trip" (default) | "fixed" | "open"
+  "destinations": [{"lon": -69.8, "lat": -11.2}, {"lon": -70.4, "lat": -12.0}],   // may be empty when "end" is given: point-to-point
+  "end_mode": "round_trip",        // default: "fixed" when end is given, else "round_trip"; "round_trip" | "fixed" | "open"
   "end": null,                     // required only when end_mode = "fixed"
-  "time_limit_s": 10,              // optional; default and allowed range come from config/mars.yaml (routing.default/min/max_time_limit_s, 10 and 1..30 as shipped); the handler clamps it. At most routing.max_destinations (25) destinations: more is 422
+  "time_limit_s": 10,              // optional; default and allowed range come from config/mars.yaml (routing.default/min/max_time_limit_s, 10 and 1..30 as shipped); the handler clamps it (auto: split between the profiles). At most routing.max_destinations (25) destinations: more is 422
   "season": "winter"  // autumn | winter | spring | summer (same keys as /api/get-layer-four); optional, for weather warnings only, never for weights
 }
 ```
-- **Snap** each point to the nearest valid node with the KD-tree. Return the snapped coordinates and the snap distance. Reject points outside the graph bbox or farther than a configurable maximum (e.g. 1 km).
+- **Snap** each point, per profile, to the nearest node the requested profile can leave (at least one finite outgoing edge) with the KD-tree, so a click on a cliff or a dune moves to usable ground. Return the snapped coordinates and the snap distance, which shows how far the point moved. Reject points outside the graph bbox or farther than a configurable maximum (e.g. 1 km); the error explains nodata, a slope too steep for the profile, or a blocked hazard zone.
 - **Validate (HTTP 422):**
   - the profile exists
-  - there is at least 1 destination and no more than a configurable maximum (e.g. 25)
-  - `end` is present if and only if `end_mode = "fixed"`
+  - there is at least 1 destination, unless `end` is given (point-to-point), and no more than a configurable maximum (e.g. 25)
+  - `end` is present if and only if `end_mode = "fixed"` (`end_mode` defaults to `"fixed"` when `end` is given, else `"round_trip"`)
   - **all snapped nodes are distinct** (start, destinations and end). Two clicks can snap to the same node; reject that and name the duplicates.
 
 ### Step 4: cost matrix (SciPy Dijkstra): `app/routing/matrix.py`
@@ -359,35 +361,20 @@ Request:
   - **The target is not connected at all:** its distance is also `inf`. Same treatment.
 - **Save each reachable leg's node path** as `legs[(i, j)]` for step 6.
 - **Output:** the N×N float matrix with ∞ meaning unreachable, plus `legs`.
-- The matrix holds shortest-path costs, so **reachability is transitive**. If start→A and A→B are finite, start→B is finite. Step 5 relies on this to explain drops.
+- The matrix holds shortest-path costs, so **reachability is transitive**. If start→A and A→B are finite, start→B is finite. Step 5 relies on this when it skips stops.
 - **Performance (measured on the native 1,287,600-node / 10,287,166-edge graph with the real profiles, Apple silicon):** building the `RoutingGraph` from a loaded `GraphData` ~0.1 s, each profile's CSR matrix ~0.3 s, one Dijkstra ~0.4 s, a 3-stop plan ~2.3 s, the KD-tree for `snap` ~0.5 s once and ~0.1 ms per snap. Peak memory for the whole process (getters, graph build and routing) ~3.5 GB. The previous rustworkx engine took 149 s and ~20 GB for one plan on the same graph.
 
-### Step 5: route solving (OR-Tools): `app/routing/solver.py`
-- **Prepare the matrix:**
-  - **Scale to integers** (OR-Tools requires them): `round(M[i][j] * SCALE)`. `SCALE` is configurable, e.g. 1000.
-  - **Replace ∞ with `BIG = 10**12`.** It must be larger than any real route cost, but small enough that summing a whole route can't overflow int64: (N + 1) · BIG plus all penalties stays far below 9.2·10¹⁸.
-  - **Drop penalty:** `PENALTY = N * max_finite_scaled_cell + 1`. This is higher than any real route cost, because a route uses at most N arcs. Assert `PENALTY < BIG`; if it isn't, lower `SCALE`.
-- **Start and end:**
-  - `round_trip`: `RoutingIndexManager(N, 1, 0)`, where node 0 is the start and depot.
-  - `fixed`: `RoutingIndexManager(N, 1, [0], [N-1])`, where the end is the last point.
-  - `open`: add a dummy node D with `M[i][D] = 0` for every i, and `M[D][i] = BIG`, then use `RoutingIndexManager(N+1, 1, [0], [D])`. D and its zero legs are never shown to the user.
-- **The model:** register the matrix as the transit callback and call `SetArcCostEvaluatorOfAllVehicles`.
-- **Allow dropping stops:** call `routing.AddDisjunction([manager.NodeToIndex(d)], PENALTY)` for **each destination only**, never for the start, end or dummy node. Because PENALTY < BIG, an unreachable stop is skipped instead of being "travelled to" along an impossible leg.
-- **Search settings:**
-  ```python
-  params = pywrapcp.DefaultRoutingSearchParameters()
-  params.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
-  params.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
-  params.time_limit.FromSeconds(time_limit_s)   # mandatory: GLS never stops by itself
-  ```
-  After the time limit, OR-Tools returns the best route found so far.
-- **Read the solution:**
-  - **Order:** walk from `routing.Start(0)` via `solution.Value(routing.NextVar(i))` until `routing.IsEnd(i)`.
-  - **Dropped:** destination d is dropped when `solution.Value(routing.NextVar(idx)) == idx`.
-- **Sanity checks:**
-  - If `SolveWithParameters` returns `None`, or the chosen route still uses a BIG arc, then no feasible route exists. This happens when the start can't reach a fixed end, and it returns a clear error (no path).
-  - **Reason for a drop:** d is `unreachable_for_profile` if `M[start][d]` is ∞ or `M[d][end]` is ∞, where the end is the start for a round trip; for an open end, only `M[start][d]` counts. This test is exact because reachability is transitive. Otherwise the stop was dropped by the time limit (`not_scheduled_within_time_limit`). This should be rare, but report it honestly.
-- **Output:** the ordered stop indices and the dropped stops with their reasons.
+### Step 5: stop order (input order): `app/routing/sequence/input_order.py`
+- **Decided 2026-11-15: destinations are visited in the order the user entered them; the backend never reorders them.**
+- Walk the destinations in request order from the start. A destination is **skipped** (reported in `dropped` as
+  `unreachable_for_profile`) when it cannot be reached from the previous visited point, or when the end (the start for
+  a round trip, the fixed end) cannot be reached from it; the route continues from the previous point. An open end
+  needs no way back.
+- If the end cannot be reached from the last visited point (e.g. a fixed end the profile cannot reach at all),
+  `NoFeasibleRoute` (HTTP 422).
+- `time_limit_s` no longer affects anything (it is still accepted for compatibility).
+- `app/routing/solver.py` (the earlier OR-Tools "best order" solver) is kept but not used by `plan_route`;
+  `NoFeasibleRoute` still lives there.
 
 ### Step 6: route assembly: `app/routing/assemble.py`
 - **Join the saved leg paths** in the solved order into one continuous node path, dropping the duplicate node at each join (each leg starts where the previous one ended). Only legs between consecutive visited stops are used, and those are all finite, so every leg exists in `legs`. Skip the leg into the dummy open-end node.
@@ -405,7 +392,10 @@ Request:
     "dropped": [{"index": 2, "point": {...}, "reason": "unreachable_for_profile"}],
     "snapped": {"start": {...,"distance_m": 140}, "destinations": [...], "end": null},
     "warnings": [],                        // e.g. the weather `message` for `season`, verbatim (section 6)
-    "body_mass_kg": 72.0                   // the user's mass behind the o2/co2/water estimates (astronaut); null for the car
+    "body_mass_kg": 72.0,                  // the user's mass behind the o2/co2/water estimates (astronaut); null for the car
+    "mode": {"requested": "auto", "chosen": "car", "reason": "Chose the vehicle: Walking cannot do this route (...).",
+             "options": [{"profile": "astronaut", "feasible": false, "reached": 0, "o2_g": null, "time_s": null, "reason": "..."},
+                         {"profile": "car", "feasible": true, "reached": 2, "o2_g": 41.2, "time_s": 5400, "reason": null}]}   // o2_g in options is per person; render reason verbatim
   }
   ```
 - A dropped stop is a normal result, not an error; the UI must list it with its reason. A drop does mean the rest of the route is incomplete for that profile, so show it clearly (data-sufficiency spirit, section 2).
@@ -415,7 +405,8 @@ Request:
 |---|---|
 | `graph.py` | `RoutingGraph.from_graph_data(GraphData)`: NumPy arrays (`src`, `dst`, per-profile `cost` and resources, node lon/lat/valid) plus lazy per-profile CSR matrices. `shortest_paths`, `trace_path`, `edge_id`/`edge_ids`, `path_cost`, `path_resources`, `coords(nodes) -> [[lon, lat], ...]`. `app/graph/loader.load_routing_context` calls `from_graph_data` at startup. |
 | `matrix.py` | `build_cost_matrix(routing_graph, profile, point_nodes) -> CostMatrix` (step 4) |
-| `solver.py` | `solve(cost_matrix, end_mode, time_limit_s) -> SolverResult` (step 5); `NoFeasibleRoute` when no route exists at all (unreachable fixed end) |
+| `sequence/` | `in_input_order(cost_matrix, end_mode, profile) -> SolverResult` (step 5): destinations in request order, skipped ones in `dropped`; `NoFeasibleRoute` when the end cannot be reached |
+| `solver.py` | `NoFeasibleRoute`; `solve(...)` (OR-Tools best order) is kept but no longer used by `plan_route` |
 | `assemble.py` | `assemble(routing_graph, query, cost_matrix, solution, capacities=None, reserve_margin=0.0) -> RoutePlan` (step 6); budget warnings only when capacities are passed |
 | `service.py` | `plan_route(routing_graph, query, capacities=None, reserve_margin=0.0) -> RoutePlan`: the one function the API (package H) calls |
 
@@ -462,7 +453,7 @@ These apply to every agent and every change.
    - Scripts: `scripts/<module>/`.
 2. **Every piece of new code ships with tests, in the same change.**
    - Backend: pytest. Tests mirror the module path: code in `backend/app/<module>/<file>.py` is tested in `backend/tests/<module>/test_<file>.py`. Create `backend/tests/<module>/` (with an `__init__.py`, so equal file names in different modules don't clash) if it does not exist. Run `cd backend && pytest`. If `pytest` is not in `backend/requirements.txt` yet, add it.
-   - Frontend: Vitest (+ React Testing Library, jsdom), with the test next to the source as `<Name>.test.jsx`. None is installed yet: the first agent that adds a frontend test also adds the dev dependencies and a `"test": "vitest run"` script in `frontend/package.json`.
+   - Frontend: Vitest (+ React Testing Library, jsdom), with the test next to the source as `<Name>.test.jsx`. Installed; run with `cd frontend && npm test`. In tests `react-leaflet` is aliased to `src/test/reactLeafletMock.jsx` (Leaflet cannot draw vectors in jsdom).
    - Scripts: tests in `scripts/<module>/tests/`.
 3. **Tests are offline and deterministic.** No network (the project reads static local files only). Use the synthetic fixtures (`app/layers/fakes.py`) and tiny hand-built graphs and arrays. A test that needs the real downloaded data must skip itself when `data/raw/` is missing (`pytest.mark.skipif`), so a fresh clone still passes.
 4. **Cover the edge cases named in this skill:** unreachable and isolated stops, `inf` weights, uphill versus downhill asymmetry, missing-data confidence labels, longitude wrap (0-360 versus -180..180), nodata cells.
@@ -481,12 +472,11 @@ Read this if you work on the frontend or the graph builder. Details live in `ref
 
 **Layer structure (graph builder)**
 - Every layer has `ingest.py` (raw files -> contract data on the shared grid, validated) and `service.py` (client format; the classes are still called `...Getter`). `app/layers/inputs/load.py: load_all(settings, grid=None)` returns `GraphInputs` and raises `LayerDataError` when data is missing. The graph builder must use only that.
-- Shared grid: `app/layers/relief/ingest.py: grid_for(settings)`, the DEM shape divided by `Settings.grid_coarsen` (default 2, about 400 m). The relief overlay shown to users and the slope used for routing are the same array (`ReliefData.slope_deg`). With `grid_coarsen=1` the graph would have ~1.3M nodes.
+- Shared grid: `app/layers/relief/ingest.py: grid_for(settings)`, the DEM shape divided by `Settings.grid_coarsen` (default 1, the native 200 m). The relief overlay shown to users and the slope used for routing are the same array (`ReliefData.slope_deg`). With `grid_coarsen=1` the graph has ~1.3M nodes; `grid_coarsen=2` would give about 400 m cells.
 - Weather data lives in `data/derived/weather/` (built by `python scripts/build_weather/build_weather.py`), not in `data/raw/`.
-- Not implemented (optional in the contract): `ReliefData.roughness_m`, `PoiData.nearest_poi_*`.
+- Not implemented (optional in the contract): `PoiData.nearest_poi_*`.
 
 **Still open**
-- Graph builder (`app/graph/build.py`) and the per-profile cost/resource formulas (`app/routing/profiles.py`) do not exist yet.
 - `Settings.capacities` is empty (no budget warnings) until the product owner confirms the values.
-- Everything is tested against synthetic fixtures only; nobody has run it against the real `data/` yet.
+- Unit tests use synthetic fixtures; real-data integration tests also exist and run when `data/raw` is present.
 - Use Python >= 3.11 (`enum.StrEnum`).

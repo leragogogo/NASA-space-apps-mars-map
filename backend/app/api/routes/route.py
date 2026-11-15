@@ -1,5 +1,8 @@
 """POST /api/route: multi-destination route for a profile (thin wrapper around app.routing.request).
 
+`profile` may be "auto" (the default): walking and driving are both routed and the response's `mode` says which
+profile was chosen and why.
+
 Login required: the token identifies the user, the user's row is loaded from the database, and its body mass
 is used for the oxygen, CO2 and water estimates (never for the route itself)."""
 from fastapi import APIRouter, Depends, HTTPException, Request

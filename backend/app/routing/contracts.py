@@ -54,8 +54,8 @@ class RouteQuery:
     season: str | None = None  # for weather warnings only, never for weights
 
     def __post_init__(self):
-        if not self.destination_nodes:
-            raise ValueError("at least one destination is required")
+        if not self.destination_nodes and self.end_mode != EndMode.FIXED:
+            raise ValueError("at least one destination is required unless the end is fixed (point-to-point)")
         if (self.end_mode == EndMode.FIXED) != (self.end_node is not None):
             raise ValueError(
                 "end_node must be given if and only if end_mode is 'fixed'"

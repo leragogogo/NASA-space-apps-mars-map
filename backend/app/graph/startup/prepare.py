@@ -25,7 +25,7 @@ def prepare_routing_context(settings, lock_timeout_s: float = DEFAULT_TIMEOUT_S)
         inputs = load_all(settings)
         models = models_from_settings(settings)
         with graph_lock(settings.graph_file, lock_timeout_s):
-            data, built = ensure_graph(settings.graph_file, inputs, models, BuildConfig())
+            data, built = ensure_graph(settings.graph_file, inputs, models, BuildConfig(rsl_buffer_m=settings.rsl_buffer_m))
         return build_routing_context(data), built
     except LayerDataError as ex:
         raise LayerUnavailable(f"The routing graph cannot be built: {ex.message}", DATA_FIX) from ex

@@ -22,8 +22,9 @@ log = logging.getLogger(__name__)
 DEFAULT_CONFIG_PATH = REPO_ROOT / "config" / "mars.yaml"
 ENV_VAR = "MARS_CONFIG"
 PARAM_CLASSES = {"astronaut": AstronautParams, "car": CarParams}
-SECTIONS = ("grid", "routing", "poi", "weather", "capacities", "slope_classes", "profiles", "confirmation")
-KNOWN_CONFIRMATIONS = ("slope_classes", "profiles.astronaut", "profiles.car", "capacities", "weather.risk_bins")
+SECTIONS = ("grid", "routing", "hazards", "poi", "weather", "capacities", "slope_classes", "profiles", "confirmation")
+KNOWN_CONFIRMATIONS = ("slope_classes", "profiles.astronaut", "profiles.car", "capacities", "weather.risk_bins",
+                       "hazards")
 _HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
 
 
@@ -193,6 +194,9 @@ def load_settings(config_path: Path | str | None = None, **overrides) -> Setting
     if not lo <= default <= hi:
         _fail(f"{where}: routing", f"need min_time_limit_s <= default_time_limit_s <= max_time_limit_s, "
                                    f"got {lo} / {default} / {hi}")
+    hazards = _mapping(doc.get("hazards"), f"{where}: hazards", ("rsl_buffer_m",))
+    if "rsl_buffer_m" in hazards:
+        kwargs["rsl_buffer_m"] = _number(hazards["rsl_buffer_m"], f"{where}: hazards.rsl_buffer_m", 0)
     poi = _mapping(doc.get("poi"), f"{where}: poi", ("sample_radius_km",))
     if "sample_radius_km" in poi:
         kwargs["poi_sample_radius_km"] = _number(poi["sample_radius_km"], f"{where}: poi.sample_radius_km", 0.001)

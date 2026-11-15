@@ -10,8 +10,9 @@ import numpy as np
 from app.core.profiles import EdgeGeometry
 from app.core.resources import ProfileId
 from app.routing.profiles.params import AstronautParams, versioned
+from app.routing.profiles.terrain import dune_factor, effective_slope_rad, hazard_blocked, roughness_factor
 
-FORMULA_VERSION = "astronaut-tobler-minetti-1-placeholder"
+FORMULA_VERSION = "astronaut-tobler-minetti-2-placeholder"
 O2_G_PER_L = 1.429  # densities at 0 C, 1 atm
 CO2_G_PER_L = 1.977
 MINETTI_MAX_GRADIENT = 0.45  # validity range of the polynomial
@@ -63,8 +64,9 @@ class AstronautModel:
 
     def compute_edge_attrs(self, geom: EdgeGeometry):
         q = self.params
-        length, i, theta = geom.length_m, geom.gradient, geom.theta_rad
+        length, i = geom.length_m, geom.gradient
         theta_max = np.radians(q.hard_limit_deg)
+        slope = effective_slope_rad(geom)  # travel gradient or the map slope across it, whichever is steeper
 
         v = tobler_speed_ms(i, q.speed_factor)
         v_flat = tobler_speed_ms(np.zeros(1), q.speed_factor)[0]
@@ -72,9 +74,10 @@ class AstronautModel:
         c_flat = minetti_cost(np.zeros(1))[0]
         # Mass, efficiency, suit penalty and gravity factors cancel in e(i) / e_flat, so the cost (and the
         # route) is the same for every astronaut.
-        margin = 1.0 + (np.abs(theta) / theta_max) ** q.p
-        cost = length * margin * (q.alpha * (v_flat / v) + q.beta * (c / c_flat))
+        margin = 1.0 + (slope / theta_max) ** q.p
+        terrain = roughness_factor(geom, q.roughness_weight, q.roughness_ref_m) * dune_factor(geom, q.dune_penalty)
+        cost = length * margin * terrain * (q.alpha * (v_flat / v) + q.beta * (c / c_flat))
 
         attrs = {"cost": cost, **self.resources(geom)}
-        blocked = np.abs(theta) > theta_max
+        blocked = (slope > theta_max) | hazard_blocked(geom, q.dune_blocked, q.rsl_blocked)
         return {k: np.where(blocked, np.inf, v_) for k, v_ in attrs.items()}

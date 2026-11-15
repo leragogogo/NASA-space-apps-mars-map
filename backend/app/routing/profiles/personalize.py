@@ -39,6 +39,8 @@ def path_resources_for_mass(graph: RoutingGraph, model: AstronautModel, nodes: S
     nodes = np.asarray(nodes, dtype=np.int64)
     if nodes.size < 2:
         return {r: 0.0 for r in RESOURCES}
+    # No terrain fields needed: terrain changes only cost and passability, never resources, and this is only applied to
+    # paths the router returned, which never use blocked edges.
     geom = edge_geometry(graph.grid, graph.elev.reshape(graph.grid.shape), nodes[:-1], nodes[1:])
     per_edge = model.resources(geom, body_mass_kg)
     return {r: float(per_edge[r].sum()) for r in RESOURCES}

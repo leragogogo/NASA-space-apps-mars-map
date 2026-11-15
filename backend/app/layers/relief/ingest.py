@@ -11,6 +11,7 @@ import numpy as np
 import tifffile
 
 from app.layers.contracts import AOI_DEM_SHAPE, GridSpec, LayerDataError, ReliefData
+from app.layers.relief.roughness import roughness_m
 from app.layers.relief.slope import slope_deg
 from app.layers.validate import validate_relief
 
@@ -68,7 +69,7 @@ def ingest_relief(settings, grid: GridSpec | None = None) -> ReliefData:
     elev = block_mean(raw, grid.nrows, grid.ncols).astype(np.float32)
     valid = ~np.isnan(elev)
     data = ReliefData(
-        grid=grid, elev_m=elev, valid=valid, slope_deg=slope_deg(elev, grid),
+        grid=grid, elev_m=elev, valid=valid, slope_deg=slope_deg(elev, grid), roughness_m=roughness_m(elev),
         source_files=(f"{path.relative_to(settings.raw_dir).as_posix()}:{hashlib.sha256(path.read_bytes()).hexdigest()}",),
     )
     validate_relief(data)

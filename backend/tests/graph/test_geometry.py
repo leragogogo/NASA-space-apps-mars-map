@@ -89,3 +89,24 @@ def test_shape_mismatches_rejected():
         edge_geometry(g, relief.elev_m, src, dst[:-1])
     with pytest.raises(ValueError):
         edge_geometry(g, relief.elev_m, src, dst, roughness_m=np.zeros((2, 2), np.float32))
+
+
+def test_terrain_fields_take_the_steeper_end_and_a_hazard_at_either_end():
+    g = fake_grid(1, 4)
+    elev = np.zeros(g.shape, dtype=np.float32)
+    slope = np.array([[5.0, 30.0, 0.0, 7.0]], dtype=np.float32)
+    dune = np.array([[False, True, False, False]])
+    rsl = np.array([[False, False, False, True]])
+    geom = edge_geometry(g, elev, np.array([0, 2, 3]), np.array([1, 3, 2]), slope_deg=slope, dune=dune, rsl=rsl)
+    assert geom.terrain_slope_deg.tolist() == [30.0, 7.0, 7.0]
+    assert geom.dune.tolist() == [True, False, False]
+    assert geom.rsl.tolist() == [False, True, True]
+
+
+def test_terrain_fields_are_optional_and_checked_against_the_grid():
+    g = fake_grid(1, 3)
+    elev = np.zeros(g.shape, dtype=np.float32)
+    geom = edge_geometry(g, elev, np.array([0]), np.array([1]))
+    assert geom.terrain_slope_deg is None and geom.dune is None and geom.rsl is None
+    with pytest.raises(ValueError, match="slope_deg shape"):
+        edge_geometry(g, elev, np.array([0]), np.array([1]), slope_deg=np.zeros((2, 2), np.float32))

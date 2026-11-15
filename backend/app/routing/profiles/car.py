@@ -6,8 +6,9 @@ import numpy as np
 from app.core.profiles import EdgeGeometry
 from app.core.resources import ProfileId
 from app.routing.profiles.params import MARS_G, CarParams, versioned
+from app.routing.profiles.terrain import dune_factor, effective_slope_rad, hazard_blocked, roughness_factor
 
-FORMULA_VERSION = "car-traction-1-placeholder"
+FORMULA_VERSION = "car-traction-2-placeholder"
 
 
 class CarModel:
@@ -26,6 +27,7 @@ class CarModel:
         q = self.params
         length, theta = geom.length_m, geom.theta_rad
         theta_max = np.radians(q.hard_limit_deg)
+        slope = effective_slope_rad(geom)
 
         v = self.speed_ms(theta)
         t = length / v
@@ -33,8 +35,9 @@ class CarModel:
         e_trac = np.maximum(0.0, force * length / q.eta_drive)  # J; no regeneration credit in the MVP
         e_per_m = e_trac / length
         e_flat = q.mass_kg * MARS_G * q.c_rr / q.eta_drive
-        margin = 1.0 + (np.abs(theta) / theta_max) ** q.p
-        cost = length * margin * (q.alpha * (q.v_max_ms / v) + q.beta * (e_per_m / e_flat))
+        margin = 1.0 + (slope / theta_max) ** q.p
+        terrain = roughness_factor(geom, q.roughness_weight, q.roughness_ref_m) * dune_factor(geom, q.dune_penalty)
+        cost = length * margin * terrain * (q.alpha * (q.v_max_ms / v) + q.beta * (e_per_m / e_flat))
 
         attrs = {
             "cost": cost,
@@ -44,5 +47,5 @@ class CarModel:
             "water_g": q.crew_n * q.crew_water_g_per_s * t,
             "energy_wh": (e_trac + q.p_aux_w * t) / 3600.0,
         }
-        blocked = np.abs(theta) > theta_max
+        blocked = (slope > theta_max) | hazard_blocked(geom, q.dune_blocked, q.rsl_blocked)
         return {k: np.where(blocked, np.inf, v_) for k, v_ in attrs.items()}
