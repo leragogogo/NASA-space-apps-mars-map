@@ -170,7 +170,7 @@ def load_settings(config_path: Path | str | None = None, **overrides) -> Setting
     if "coarsen" in grid:
         kwargs["grid_coarsen"] = _number(grid["coarsen"], f"{where}: grid.coarsen", 1, integer=True)
     routing_keys = ("reserve_margin", "max_snap_distance_m", "max_destinations", "default_time_limit_s",
-                    "min_time_limit_s", "max_time_limit_s")
+                    "min_time_limit_s", "max_time_limit_s", "build_graph_on_startup")
     routing = _mapping(doc.get("routing"), f"{where}: routing", routing_keys)
     if "reserve_margin" in routing:
         margin = _number(routing["reserve_margin"], f"{where}: routing.reserve_margin", 0)
@@ -179,6 +179,10 @@ def load_settings(config_path: Path | str | None = None, **overrides) -> Setting
         kwargs["reserve_margin"] = margin
     if "max_snap_distance_m" in routing:
         kwargs["max_snap_distance_m"] = _number(routing["max_snap_distance_m"], f"{where}: routing.max_snap_distance_m", 1)
+    if "build_graph_on_startup" in routing:
+        if not isinstance(routing["build_graph_on_startup"], bool):
+            _fail(f"{where}: routing.build_graph_on_startup", f"expected true or false, got {routing['build_graph_on_startup']!r}")
+        kwargs["build_graph_on_startup"] = routing["build_graph_on_startup"]
     if "max_destinations" in routing:
         kwargs["max_destinations"] = _number(routing["max_destinations"], f"{where}: routing.max_destinations", 1, integer=True)
     for key in ("default_time_limit_s", "min_time_limit_s", "max_time_limit_s"):

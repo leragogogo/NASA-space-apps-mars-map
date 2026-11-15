@@ -41,7 +41,12 @@ def real_body(profile="astronaut", **extra) -> dict:
 
 
 def client_for(data_dir, config=None, **settings) -> AuthedTestClient:
-    """An app configured like production: from the YAML file (the same one the graph was built with)."""
+    """An app configured like production: from the YAML file (the same one the graph was built with).
+
+    The shipped file builds the graph at startup; these tests build it themselves (or want it missing), so that is
+    switched off unless a test asks for it with build_graph_on_startup=True.
+    """
+    settings.setdefault("build_graph_on_startup", False)
     return AuthedTestClient(create_app(load_settings(config, data_dir=data_dir, jwt_secret_key=SECRET, **settings)))
 
 
@@ -190,6 +195,67 @@ def test_bad_requests_are_rejected_clearly(client):
     assert client.post("/api/route", json={**route_body(), "profile": "tank"}).status_code == 422
 
 
+# ----------------------------------------------------------------------------------- graph built at startup
+def test_the_graph_is_built_in_the_background_when_the_app_starts(tmp_path, monkeypatch):
+    """No manual `python -m app.graph`: the API starts at once, the route endpoint is 503 until the build is done."""
+    import threading
+
+    import app.graph.startup.background as background
+
+    root = make_gentle_data(tmp_path / "data")
+    gate, real = threading.Event(), background.prepare_module.prepare_routing_context
+    monkeypatch.setattr(background.prepare_module, "prepare_routing_context",
+                        lambda settings: (gate.wait(60), real(settings))[1])  # hold the build open
+    with client_for(root, build_graph_on_startup=True) as c:
+        assert c.app.state.routing_task.is_alive()
+        assert c.get("/api/get-layer-two").status_code == 200  # everything else is served meanwhile
+        r = c.post("/api/route", json=route_body())
+        assert r.status_code == 503 and "being prepared" in r.json()["detail"] and "fix" in r.json()
+        gate.set()
+        c.app.state.routing_task.join(120)
+        assert (root / "graph" / "graph.npz").is_file()
+        r = c.post("/api/route", json=route_body())
+        assert r.status_code == 200 and r.json()["resources"]["time_s"] > 0
+
+
+def test_a_graph_that_is_already_fresh_is_reused_at_startup(tmp_path, capsys):
+    root = make_gentle_data(tmp_path / "data")
+    assert graph_cli(["--data-dir", str(root)]) == 0
+    stamp = (root / "graph" / "graph.npz").stat().st_mtime_ns
+    with client_for(root, build_graph_on_startup=True) as c:
+        c.app.state.routing_task.join(120)
+        assert c.post("/api/route", json=route_body()).status_code == 200
+    assert (root / "graph" / "graph.npz").stat().st_mtime_ns == stamp  # loaded, not rebuilt
+
+
+def test_a_stale_graph_is_rebuilt_at_startup(tmp_path):
+    root = make_gentle_data(tmp_path / "data")
+    old = custom_config(tmp_path, suit_mass_kg=65.0)
+    assert graph_cli(["--data-dir", str(root), "--config", str(old)]) == 0
+    stamp = (root / "graph" / "graph.npz").stat().st_mtime_ns
+    with client_for(root, build_graph_on_startup=True) as c:  # the default configuration has other parameters
+        c.app.state.routing_task.join(120)
+        j = c.post("/api/route", json=route_body()).json()
+    assert (root / "graph" / "graph.npz").stat().st_mtime_ns != stamp
+    assert j["body_mass_kg"] == 80.0 and not any("reference astronaut mass" in w for w in j["warnings"])  # in sync again
+
+
+def test_missing_data_leaves_a_clear_503_instead_of_crashing_the_app(tmp_path):
+    with client_for(tmp_path, build_graph_on_startup=True) as c:  # no data/raw at all
+        c.app.state.routing_task.join(60)
+        r = c.post("/api/route", json=route_body())
+        assert r.status_code == 503 and "cannot be built" in r.json()["detail"] and "download_data.py" in r.json()["fix"]
+        assert c.get("/api/hello").status_code == 200  # the API itself is up
+
+
+def test_without_the_flag_nothing_is_built_and_no_thread_is_started(tmp_path):
+    root = make_gentle_data(tmp_path / "data")
+    with client_for(root, build_graph_on_startup=False) as c:
+        assert not hasattr(c.app.state, "routing_task")
+        assert c.post("/api/route", json=route_body()).status_code == 503
+    assert not (root / "graph").exists()
+
+
 # ----------------------------------------------------------------------------------- configuration
 def custom_config(tmp_path, **astronaut) -> Path:
     doc = yaml.safe_load(DEFAULT_CONFIG_PATH.read_text())
@@ -267,8 +333,11 @@ real_only = pytest.mark.skipif(not _REAL, reason="data/raw not downloaded (run s
 def real_client(tmp_path_factory):
     root = tmp_path_factory.mktemp("real_pipeline")
     (root / "raw").symlink_to(REAL_DATA / "raw", target_is_directory=True)  # graph.npz goes in the temp dir
-    assert graph_cli(["--data-dir", str(root)]) == 0  # native 200 m grid
-    with client_for(root, capacities={"astronaut": {"o2_g": 2000.0, "time_s": 8 * 3600.0}}) as c:
+    # no manual `python -m app.graph`: the app builds the native 200 m graph itself when it starts
+    with client_for(root, build_graph_on_startup=True,
+                    capacities={"astronaut": {"o2_g": 2000.0, "time_s": 8 * 3600.0}}) as c:
+        c.app.state.routing_task.join(600)
+        assert (root / "graph" / "graph.npz").is_file()
         yield c
 
 

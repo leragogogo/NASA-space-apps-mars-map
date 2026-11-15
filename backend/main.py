@@ -10,6 +10,7 @@ from app.core.config import Settings
 from app.core.configfile import load_settings
 from app.db.session import init_db, make_engine
 from app.graph.loader import load_routing_context, staleness_warnings
+from app.graph.startup import start_background_build
 from app.layers.base import LayerUnavailable
 from app.layers.registry import build_registry
 
@@ -29,12 +30,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.layers = build_registry(settings)  # loads every layer once
         engine = make_engine(settings.database_url)
         app.state.session_factory = init_db(engine)
-        try:
-            app.state.routing = load_routing_context(settings)  # graph + KD-tree, once
-            for warning in staleness_warnings(app.state.routing, settings):
-                log.warning(warning)
-        except LayerUnavailable as ex:
-            app.state.routing = ex  # /api/route answers 503; layer endpoints keep working
+        if settings.build_graph_on_startup:
+            start_background_build(app, settings)  # builds the graph if missing or stale; /api/route is 503 until ready
+        else:
+            try:
+                app.state.routing = load_routing_context(settings)  # graph + KD-tree, once
+                for warning in staleness_warnings(app.state.routing, settings):
+                    log.warning(warning)
+            except LayerUnavailable as ex:
+                app.state.routing = ex  # /api/route answers 503; layer endpoints keep working
         yield
         engine.dispose()
 

@@ -9,6 +9,7 @@ per edge. Spec: context/skills/mars-mvp-data/references/edge-cost-model.md.
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
@@ -99,7 +100,13 @@ class GraphData:
         arrays.update(src=self.src, dst=self.dst, **self.edge_arrays)
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        np.savez_compressed(path, **arrays, **{_META_KEY: np.array(json.dumps(meta))})
+        # Write beside the target and rename: a reader (another worker, a restart) never sees a half-written file.
+        tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp.npz")
+        try:
+            np.savez_compressed(tmp, **arrays, **{_META_KEY: np.array(json.dumps(meta))})
+            os.replace(tmp, path)
+        finally:
+            tmp.unlink(missing_ok=True)
 
     @staticmethod
     def read_meta(path: str | Path) -> dict[str, Any]:

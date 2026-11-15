@@ -121,7 +121,7 @@ Everything below lives in **`config/mars.yaml`** (override the file with `MARS_C
 |---|---|
 | `profiles.<astronaut\|car>` | every model parameter: `hard_limit_deg`, `alpha`, `beta`, `p` and the parameters of sections 5 and 6 (names match `AstronautParams` / `CarParams`). A parameter that is not listed keeps the default in `app/routing/profiles/params.py`. |
 | `capacities.<profile>` | budgets the vehicle or suit carries, per resource (`time_s`, `o2_g`, `co2_g`, `water_g`, `energy_wh`); empty = no budget warnings |
-| `routing` | `reserve_margin` (share of each budget kept in reserve), `max_snap_distance_m`, request limits `max_destinations` and the solver time budget `default_time_limit_s` / `min_time_limit_s` / `max_time_limit_s` (applied per request by the handler, not by the schema) |
+| `routing` | `build_graph_on_startup` (build or refresh the graph in the background when the API starts), `reserve_margin` (share of each budget kept in reserve), `max_snap_distance_m`, request limits `max_destinations` and the solver time budget `default_time_limit_s` / `min_time_limit_s` / `max_time_limit_s` (applied per request by the handler, not by the schema) |
 | `weather` | `risk_bins.moderate_from` / `high_from`: dust-storm risk thresholds in storm-days per Mars year. The weather files are computed with them (`scripts/weather`) and record them; after changing them re-run `python scripts/download_data.py --only weather --force` |
 | `slope_classes` | classes of the map overlay (display only); the loader checks that the steepest walkable class ends at the astronaut `hard_limit_deg` and the steepest drivable class at the car limit |
 | `grid`, `poi` | `grid.coarsen` (1 = native 200 m), `poi.sample_radius_km` |

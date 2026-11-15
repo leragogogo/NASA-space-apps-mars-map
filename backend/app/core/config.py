@@ -92,6 +92,9 @@ class Settings:
     capacities: dict = field(default_factory=dict)
     reserve_margin: float = 0.2
     max_snap_distance_m: float = 1000.0
+    # Build the routing graph in the background when the API starts and it is missing or stale (routing section of
+    # config/mars.yaml; off here so tests and tools that start an app do not build one by accident).
+    build_graph_on_startup: bool = False
     # Request limits (routing section of config/mars.yaml): destinations per request and the solver time budget.
     max_destinations: int = 25
     default_time_limit_s: float = 10.0

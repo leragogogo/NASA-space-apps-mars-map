@@ -17,6 +17,12 @@ routing:
   reserve_margin: 0.2
   # A clicked point farther than this from the nearest node with elevation data is rejected (HTTP 422).
   max_snap_distance_m: 1000
+  # Build the routing graph when the API starts, if it is missing or no longer matches this file and the data.
+  # Runs in the background (the API answers at once, /api/route returns 503 "being prepared" until it is ready).
+  # Takes about a minute and ~4 GB of memory the first time; later starts only check freshness and load it.
+  # Needs data/raw/ (python scripts/download_data.py). Several workers build once (a lock file next to graph.npz).
+  # Set to false to build by hand with `cd backend && python -m app.graph`.
+  build_graph_on_startup: true
   # Request limits: destinations allowed in one request (more is HTTP 422), and the time the stop-order solver may
   # use. A request that gives no time limit gets the default; one outside the range is clamped to it.
   max_destinations: 25

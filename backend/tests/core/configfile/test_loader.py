@@ -191,7 +191,15 @@ def test_the_built_in_limits_match_the_routing_contract_defaults():
     assert load_settings().route_limits == RouteLimits()
 
 
+def test_the_graph_is_built_at_startup_in_the_shipped_file_and_not_by_default(tmp_path, shipped):
+    assert load_settings().build_graph_on_startup is True
+    assert Settings().build_graph_on_startup is False  # code defaults never build by accident (tests, tools)
+    shipped["routing"]["build_graph_on_startup"] = False
+    assert load_settings(write(tmp_path, shipped)).build_graph_on_startup is False
+
+
 @pytest.mark.parametrize("change, message", [
+    (lambda d: d["routing"].update(build_graph_on_startup="yes"), "true or false"),
     (lambda d: d["routing"].update(max_destinations=0), "max_destinations.*>= 1"),
     (lambda d: d["routing"].update(max_destinations=2.5), "whole number"),
     (lambda d: d["routing"].update(default_time_limit_s=50), "min_time_limit_s <= default_time_limit_s"),

@@ -95,3 +95,27 @@ def test_unknown_format_version_is_rejected(tmp_path):
     np.savez_compressed(path, **arrays)
     with pytest.raises(ValueError, match="unsupported graph format"):
         GraphData.load(path)
+
+
+def test_save_leaves_no_temporary_file(tmp_path):
+    path = tmp_path / "graph" / "graph.npz"
+    make_graph().save(path)
+    assert [p.name for p in path.parent.iterdir()] == ["graph.npz"]
+
+
+def test_a_failed_save_keeps_the_previous_file_intact(tmp_path, monkeypatch):
+    path = tmp_path / "graph.npz"
+    make_graph().save(path)
+    before = path.read_bytes()
+
+    def boom(file, **arrays):
+        file = open(file, "wb")  # start writing the temporary file ...
+        file.write(b"half a graph")
+        file.close()
+        raise OSError("disk full")  # ... and fail midway
+
+    monkeypatch.setattr(np, "savez_compressed", boom)
+    with pytest.raises(OSError, match="disk full"):
+        make_graph().save(path)
+    assert path.read_bytes() == before and GraphData.load(path).n_edges > 0  # readers still see the old graph
+    assert [p.name for p in tmp_path.iterdir()] == ["graph.npz"]  # and the half-written temp file is gone
