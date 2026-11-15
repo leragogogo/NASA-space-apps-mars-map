@@ -19,11 +19,11 @@ edge = {
 
 Physical storage is **struct-of-arrays**, not a dict per edge. About 2.6M directed edges as Python dicts would take multiple GB; as float32 arrays, 2 profiles x 6 attributes is ~125 MB.
 
-- Graph topology: `src[m]`, `dst[m]`. The rustworkx edge payload is the edge id (index into every array).
+- Graph topology: `src[m]`, `dst[m]`. The edge id is the index into every array.
 - One array per `(profile, attribute)`, named `<profile>__<attr>` (e.g. `astronaut__cost`, `car__energy_wh`), all length `m`.
 - `app/graph/` exposes `edge_attrs(edge_id) -> dict` returning the logical view above, for the API, debugging and tests.
 - Every edge has every attribute for every profile. Impassable for a profile = `cost = inf` and all its other attributes `inf`. Such an edge is never on a returned path (the solver treats the pair as unreachable).
-- `cost` and the resources are >= 0 and never NaN (rustworkx rejects negative and NaN weights).
+- `cost` and the resources are >= 0 and never NaN (the Dijkstra needs non-negative, non-NaN weights). Dtypes: `cost` float64 (the solver sums many of them), resources float32. `app/graph/attrs.py` enforces that an impassable edge has `cost` and every resource inf together.
 
 ## 2. Canonical attributes and units
 
@@ -47,6 +47,7 @@ Inputs, for edge `u -> v` (signed, so uphill and downhill differ):
 - `dz = elev[v] - elev[u]`, `L = sqrt(d^2 + dz^2)`.
 - `i = dz / d` (gradient, signed), `theta = atan(i)`.
 - Optional: roughness at `v` (relief layer, `roughness_m`).
+- Terrain and hazard inputs (section 4a): `terrain_slope_deg` (the larger map slope of the two end cells), `dune` and `rsl` (hazard flags of the end cells).
 
 Elevation comes from the relief ingestion's `elev_m` (the same array the slope overlay is derived from).
 
@@ -58,14 +59,34 @@ s(theta) = 1 + (|theta| / theta_max)^p          # smooth margin before the hard 
 theta > theta_max  ->  cost = inf               # hard limit
 ```
 
+Formula version 2 replaces `theta` by `s_eff` in the margin and the hard limit and adds the factors R and D and hazard blocking: see section 4a.
+
 - `v(i)` speed (m/s) and `e(i)` energy per metre on this edge, from the profile formulas below. `v_flat = v(0)`, `e_flat = e(0)`.
 - Both ratios equal 1 on flat ground, so with `alpha + beta = 1`, `cost = L` there. Defaults: `alpha = beta = 0.5` (to calibrate).
 - `alpha`, `beta`, `p` are per-profile config. Profile presets (fastest / lowest energy) change `alpha` and `beta`. They are not request parameters in the MVP.
 - **Weather risk is deliberately not in the cost.** Weights are precomputed once and the season is a request parameter (section 9 and 10 of SKILL.md). Weather is attached to the response as warnings. If risk ever has to steer routes, add per-season cost columns, not a runtime term.
 
+## 4a. Terrain and hazard terms (both profiles, formula version 2)
+
+    cost = L * (1 + (s_eff / hard_limit)^p) * R * D * [alpha * time_ratio + beta * energy_ratio]
+
+- `s_eff = max(|travel gradient angle|, map slope)`, where map slope is the larger `ReliefData.slope_deg` of the
+  edge's two end cells (the array the walkability overlay shows). Walking along a steep hillside therefore counts
+  as steep, as the Artemis limit ("up/down/across a slope") requires.
+- `R = 1 + roughness_weight * min(roughness_m / roughness_ref_m, 3)`, roughness at the edge's end cell
+  (`app/layers/relief/roughness.py`: deviation from the plane through the 4 neighbours; 0 on any plane).
+- `D = dune_penalty` on edges touching a dune-field cell, else 1.
+- Impassable (every attribute inf) when `s_eff > hard_limit`, or the edge touches a dune cell and
+  `dune_blocked`, or an end cell within `hazards.rsl_buffer_m` of an RSL site and `rsl_blocked`.
+- Masks: `app/graph/hazards/masks.py` (dune polygons by cell centre; RSL points with a metric buffer).
+- Resources (time, O2, CO2, water, energy) are NOT changed by `R`, `D` or the cross-slope term: there is no
+  calibrated data for that. Defaults: astronaut R weight 0.5, dunes x1.5, RSL blocked; car R weight 1.0, dunes
+  blocked, RSL blocked; `roughness_ref_m` 3 m; RSL buffer 500 m. All placeholders (`confirmation.hazards`).
+- On the real 200 m DEM this closes ~8.5 % of cells to walking (map slope > 20°) and ~3.8 % to the car (> 25°).
+
 ## 5. Profile `astronaut`
 
-Hard limit: slope > 15 deg (config; unconfirmed).
+Hard limit: effective slope `s_eff` (4a) > 20 deg (`config/mars.yaml`; unconfirmed). Basis: the Artemis suit's stated capability of walking slopes up to 20 deg (lunar; NASA Exploration EVA Testing and Analogs, 2021). Keep it below ~24 deg, where the Minetti polynomial (valid to a 0.45 gradient) ends.
 
 Parameters: `body_mass_kg`, `suit_mass_kg`, `gear_mass_kg` (`m_total` = sum), `efficiency_factor` (default 1.0), `suit_mobility_penalty` (>= 1.0, empirical), `speed_factor`, `gravity_factor` (calibration for 3.71 m/s2, default 1.0), `P_suit_W`, `o2_leak_g_per_s`, `env_heat_W`, `rq` (~0.85), `o2_kJ_per_L` (~20.1), `h_cool_J_per_g`. No real values yet.
 
@@ -86,13 +107,13 @@ Notes:
 - Check whether Minetti's figure is a net or gross cost; if net, add a resting baseline to `o2_g` and `water_g`.
 - Mars gravity lowers the real cost, but the scaling is approximate; `gravity_factor` is a calibration knob, not physics.
 - Oxygen, CO2 removal and cooling water all scale with `E_met`, so they are nearly collinear; keep them separate because their capacities differ. The binding limit is whichever capacity is smallest relative to its use.
-- Who the astronaut is enters mainly through mass: Minetti gives energy per kg per metre, so `m_total` (body + suit + gear) scales it. Optional parameter `max_metabolic_rate_W` (a fraction of aerobic capacity) can cap speed on climbs so the energy rate stays sustainable. Height, age and sex are not modelled (no data to calibrate them).
+- Who the astronaut is enters mainly through mass: Minetti gives energy per kg per metre, so `m_total` (body + suit + gear) scales it. **Mass cancels in the route cost** (`e(i)/e_flat` has it in both parts), so every astronaut gets the same route; it only scales `o2_g`, `co2_g` and `water_g`. Those three are therefore recomputed per request for the requesting user's body mass, over the edges of the returned path (`AstronautModel.resources(geom, body_mass_kg)`, shared with the graph builder, which uses the reference `body_mass_kg`); the stored graph columns are the reference-mass values. Optional parameter `max_metabolic_rate_W` (a fraction of aerobic capacity) can cap speed on climbs so the energy rate stays sustainable. Height, age and sex are not modelled (no data to calibrate them).
 - Minetti's coefficients come from healthy adults on Earth without suits, so results are good for comparing routes, not for medical prediction. In reduced gravity, carried load costs closer to weight (mass x 3.71) than mass, while inertia stays tied to mass; the scaling is approximate. If suit mass dominates, the Pandolf load-carriage equation is an alternative to scaling Minetti linearly.
 - A pulse oximeter does not measure consumption (SpO2 is not supply). Heart rate could later calibrate `efficiency_factor`. Out of MVP scope.
 
 ## 6. Profile `car`
 
-Hard limit: slope > 35 deg (config; unconfirmed).
+Hard limit: effective slope `s_eff` (4a) > 25 deg (`config/mars.yaml`; unconfirmed). Basis: the Apollo rover's design maximum (20-23 deg in favourable conditions, max 25 deg; lunar; LPSC 2026 abstract). A heavier pressurized rover may need less.
 
 Parameters: `mass_kg`, `c_rr` (rolling resistance on regolith), `eta_drive`, `v_max`, `v_min`, `p_speed`, `P_aux_W`, `crew_n`, per-person rates `crew_o2_g_per_s`, `crew_co2_g_per_s`, `crew_water_g_per_s` (seated, pressurised cabin assumed), `g = 3.71`.
 
@@ -109,20 +130,33 @@ o2_g, co2_g, water_g = crew_n * rate * t                              (time-driv
 ## 7. How routing uses it
 
 - The matrix and solver use `cost` only (SKILL.md steps 4-5).
-- After solving, each leg's resources are summed over its edges: `attrs[profile][attr][edge_id]` for each consecutive node pair, with `edge_id = g.get_edge_data(a, b)`. Report per-leg and total resources in the response.
+- After solving, each leg's resources are summed over its edges: `attrs[profile][attr][edge_id]` for each consecutive node pair, with `edge_id = routing_graph.edge_id(a, b)`. Report per-leg and total resources in the response.
 - Compare totals with capacities from config (`o2_g`, `co2_g`, `water_g`, `energy_wh`, `time_s`) and add a warning per exceeded budget, with a reserve margin (config, e.g. 20 %). MVP does not enforce budgets inside the search.
 - Future (not MVP): walk-back feasibility. Run Dijkstra backwards from the habitat to get a per-node return cost for each resource, then keep a node only if `outbound + return <= capacity * (1 - reserve)`. A car trip must also stay within walking range of the habitat using the astronaut resources. Needs a habitat location in the request or config.
 
-## 8. Config schema (names only)
+## 8. Configuration
 
-Under `app/core/config`: `profiles.<profile>.{hard_limit_deg, alpha, beta, p, ...params above}`, `capacities.<profile>.{o2_g, co2_g, water_g, energy_wh, time_s}`, `reserve_margin`, `formula_version`.
+Everything below lives in **`config/mars.yaml`** (override the file with `MARS_CONFIG` for the API or `--config` for `python -m app.graph`). It is read by `app/core/configfile/` into `Settings` and validated at startup; a typo, a wrong type or an inconsistent value stops the program with a message naming the key.
+
+| Section | What it holds |
+|---|---|
+| `profiles.<astronaut\|car>` | every model parameter: `hard_limit_deg`, `alpha`, `beta`, `p`, `roughness_weight`, `roughness_ref_m`, `dune_blocked`, `dune_penalty`, `rsl_blocked` and the parameters of sections 5 and 6 (names match `AstronautParams` / `CarParams`). A parameter that is not listed keeps the default in `app/routing/profiles/params.py`. |
+| `hazards.rsl_buffer_m` | RSL exclusion radius in metres (500 m placeholder); part of the graph fingerprint |
+| `capacities.<profile>` | budgets the vehicle or suit carries, per resource (`time_s`, `o2_g`, `co2_g`, `water_g`, `energy_wh`); empty = no budget warnings |
+| `routing` | `build_graph_on_startup` (build or refresh the graph in the background when the API starts), `reserve_margin` (share of each budget kept in reserve), `max_snap_distance_m`, request limits `max_destinations` and the solver time budget `default_time_limit_s` / `min_time_limit_s` / `max_time_limit_s` (applied per request by the handler, not by the schema) |
+| `weather` | `risk_bins.moderate_from` / `high_from`: dust-storm risk thresholds in storm-days per Mars year. The weather files are computed with them (`scripts/weather`) and record them; after changing them re-run `python scripts/download_data.py --only weather --force` |
+| `slope_classes` | classes of the map overlay (display only); the loader checks that the steepest walkable class ends at the astronaut `hard_limit_deg` and the steepest drivable class at the car limit |
+| `grid`, `poi` | `grid.coarsen` (1 = native 200 m), `poi.sample_radius_km` |
+| `confirmation` | per section `status: placeholder\|confirmed` and a `source`; a confirmed section must name its source, and the API logs the unconfirmed sections at startup |
+
+Changing a profile parameter changes the graph's `formula_version`, and changing `hazards.rsl_buffer_m` changes the graph fingerprint, so the saved graph is stale in both cases. A startup build (`routing.build_graph_on_startup: true`) or `python -m app.graph` rebuilds it. With the startup build off, the API logs both kinds of staleness once at startup (`app/graph/loader.py: staleness_warnings`), along with a graph on another grid than the configuration says. A graph with stale profile parameters also makes astronaut requests fall back to the reference mass with a warning (section 5, body mass).
 
 ## 9. Tests
 
 `compute_edge_attrs(profile, geom, params) -> dict[str, ndarray]` is a pure, vectorised function; test it without any graph or data:
-- Flat edge: `cost == L` when `alpha + beta == 1`.
+- Flat edge: `cost == L` when `alpha + beta == 1` (holds with no roughness/dune terms).
 - Uphill: cost and energy increase with gradient. Gentle downhill is cheaper than flat for the astronaut; steep downhill costs more than gentle downhill (Minetti minimum near i = -0.2).
-- Beyond the hard limit: all attributes `inf`. Elsewhere: all >= 0, no NaN.
+- Beyond the hard limit (effective slope `s_eff`, 4a): all attributes `inf`. Elsewhere: all >= 0, no NaN.
 - A->B and B->A differ on a slope.
 - Resources scale linearly with `L` on a uniform slope.
 - Location: `backend/tests/routing/` (or `backend/tests/profiles/`), per the development rules (SKILL.md section 11).
@@ -142,6 +176,9 @@ What an EVA is limited by, and how each item is handled:
 | Walk-back | return trip must fit the remaining resources (Apollo-style rule) | future filter, section 7 |
 | Radiation | chronic dose = rate x time; solar particle events (SPE) are the real hazard | not modelled. Planned as an SPE shelter-reachability rule (needs a "distance to shelter" node attribute), not a dose calculation. Deep terrain may be partly shielded by atmosphere depth and canyon walls (the DEM could proxy this), but that needs a real source before use |
 | Thermal environment, communications line of sight, rock abundance | sun/shadow, terrain, surface | not modelled: no data in our datasets. DEM roughness is a coarse proxy at 200 m |
+| Cross-slope | map slope of the end cells | in the cost and the hard limit, section 4a |
+| Dune fields, RSL sites | POI layer | dunes: cost factor (astronaut) or blocked (car); RSL: blocked within the buffer; section 4a |
+| Roughness | DEM | cost only, section 4a |
 | Dust-storm risk | season, location | not in the cost (see section 4); shown as a warning from the weather frame, rendered verbatim |
 
 Design notes:

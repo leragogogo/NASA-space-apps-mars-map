@@ -1,0 +1,143 @@
+# Mars map configuration: everything the product owner may need to change, in one place.
+#
+# Loaded at startup by the API and by `python -m app.graph`. Point to another file with the MARS_CONFIG
+# environment variable (API) or `--config PATH` (graph builder). Changing a profile parameter changes the
+# graph's formula version, so rebuild the graph afterwards: `cd backend && python -m app.graph`.
+#
+# Every number below is a PLACEHOLDER (a reasonable engineering guess, not a requirement or a real suit or
+# rover specification) until its section is marked confirmed in `confirmation` at the bottom.
+
+grid:
+  # The graph and the map overlay share one grid: the 200 m DEM divided by this factor.
+  # 1 = native 200 m (1.29 M nodes, 10.3 M edges, ~40 s to build, 490 MB file). 2 = ~400 m (~320k nodes).
+  coarsen: 1
+
+routing:
+  # Share of each budget kept in reserve: a trip that uses more than capacity * (1 - reserve_margin) gets a warning.
+  reserve_margin: 0.2
+  # A clicked point farther than this from the nearest node with elevation data is rejected (HTTP 422).
+  max_snap_distance_m: 1000
+  # Build the routing graph when the API starts, if it is missing or no longer matches this file and the data.
+  # Runs in the background (the API answers at once, /api/route returns 503 "being prepared" until it is ready).
+  # Takes about a minute and ~4 GB of memory the first time; later starts only check freshness and load it.
+  # Needs data/raw/ (python scripts/download_data.py). Several workers build once (a lock file next to graph.npz).
+  # Set to false to build by hand with `cd backend && python -m app.graph`.
+  build_graph_on_startup: true
+  # Request limits: destinations allowed in one request (more is HTTP 422), and the time the stop-order solver may
+  # use. A request that gives no time limit gets the default; one outside the range is clamped to it.
+  max_destinations: 25
+  default_time_limit_s: 10
+  min_time_limit_s: 1
+  max_time_limit_s: 30
+
+hazards:
+  # RSL sites (recurring slope lineae, points in the POI layer) are candidate Special Regions (planetary
+  # protection): every cell within this distance is impassable for profiles with rsl_blocked: true.
+  # Dune fields (polygons) are handled per profile below (dune_blocked / dune_penalty).
+  # Part of the graph fingerprint: a startup build or `python -m app.graph` rebuilds the graph after changing it.
+  rsl_buffer_m: 500
+
+poi:
+  # Points of interest within this distance of a point are reported when sampling a location.
+  sample_radius_km: 2.0
+
+weather:
+  # Dust-storm risk from the historical frequency of storm-days per Mars year in a 1 degree cell and season:
+  # below moderate_from = Low, from moderate_from up to high_from = Moderate, high_from and above = High.
+  # The weather files are COMPUTED with these numbers (scripts/weather, run by download_data.py --only weather) and
+  # record which ones they used; after changing them re-run `python scripts/download_data.py --only weather --force`.
+  risk_bins:
+    moderate_from: 1.0
+    high_from: 4.0
+
+# Budgets per profile, in the units below. These are the amounts a vehicle or suit CARRIES for one trip.
+# A route whose total use of a resource exceeds capacity * (1 - reserve_margin) gets a warning in the response.
+# Budgets are only checked after the route is found; they do not steer the search. Leave empty for no warnings.
+#   time_s     trip duration limit (s), e.g. the maximum EVA length          o2_g    oxygen carried (g)
+#   co2_g      CO2 the scrubber can absorb (g)                              water_g cooling water carried (g)
+#   energy_wh  battery energy (Wh)
+# Example, to be replaced by real values:
+#   capacities:
+#     astronaut: {time_s: 28800, o2_g: 2000, co2_g: 2400, water_g: 4000, energy_wh: 1500}
+#     car:       {time_s: 36000, energy_wh: 20000}
+capacities: {}
+
+# Slope classes of the map overlay and the `point` endpoint (display only). The routing limits are the
+# `hard_limit_deg` of each profile below; the loader checks they agree: the steepest walkable class must end at
+# the astronaut limit and the steepest drivable class at the car limit.
+#
+# Basis (NASA documents, all LUNAR; no Mars-specific limit was found, see `confirmation` below):
+#   astronaut 20 deg: the Artemis suit's stated capability "walking up/down/across a slope of up to 20 degrees"
+#       (NASA Exploration EVA Testing and Analogs, 2021); Apollo 15 EVAs reached ~17 deg.
+#   car 25 deg: the Apollo rover was designed for 20-23 deg in favourable conditions with a maximum of 25 deg
+#       (Apollo LRV traverse metrics, LPSC 2026); Apollo 15/16 traverses peaked at 22.1 and 24.7 deg.
+# The astronaut limit must stay below ~24 deg: the walking-energy model (Minetti) is only valid to a 0.45 gradient.
+slope_classes:
+  - {id: easy_walk,        label: Easy walk,             min_deg: 0,  max_deg: 5,  color: "#1a9850", walkable: true,  vehicle: true}
+  - {id: walkable,         label: Walkable,              min_deg: 5,  max_deg: 15, color: "#91cf60", walkable: true,  vehicle: true}
+  - {id: walkable_caution, label: Walkable with caution, min_deg: 15, max_deg: 20, color: "#d9ef8b", walkable: true,  vehicle: true}
+  - {id: vehicle_only,     label: Vehicle only,          min_deg: 20, max_deg: 25, color: "#fee08b", walkable: false, vehicle: true}
+  - {id: impassable,       label: Impassable,            min_deg: 25, max_deg: 90, color: "#d73027", walkable: false, vehicle: false}
+
+# Cost and resource model of each profile (references/edge-cost-model.md). Names match the model parameters.
+# cost = length * (1 + (|slope| / hard_limit)^p) * [alpha * time_ratio + beta * energy_ratio]; slopes beyond
+# hard_limit are impassable. Body mass is NOT here for the route: the astronaut's body_mass_kg is only the
+# reference mass of the stored graph, each user's own mass (from their account) is used for the estimates.
+# Terrain terms: cost x roughness factor x dune factor; impassable where the map slope of either end cell
+# exceeds hard_limit_deg, or on blocked hazards (edge-cost-model.md section 4a).
+profiles:
+  astronaut:
+    hard_limit_deg: 20.0         # NASA Artemis suit capability (lunar); see slope_classes
+    alpha: 0.5               # weight of travel time in the cost
+    beta: 0.5                # weight of energy in the cost
+    p: 2.0                   # how fast the cost rises towards the slope limit
+    body_mass_kg: 80.0       # reference mass of the stored graph
+    suit_mass_kg: 50.0
+    gear_mass_kg: 20.0
+    efficiency_factor: 1.0
+    suit_mobility_penalty: 1.3   # extra effort of moving in a pressurised suit
+    speed_factor: 0.6            # share of the Tobler walking speed reached in a suit
+    gravity_factor: 1.0          # calibration for 3.71 m/s2
+    p_suit_w: 150.0              # suit power draw (W)
+    o2_leak_g_per_s: 0.001
+    env_heat_w: 100.0            # heat load from the environment (W)
+    h_cool_j_per_g: 2400.0       # heat removed per gram of cooling water (J/g)
+    rq: 0.85                     # respiratory quotient
+    o2_kj_per_l: 20.1            # energy per litre of oxygen consumed (kJ/L)
+    roughness_weight: 0.5        # cost x (1 + weight * min(roughness / roughness_ref_m, 3))
+    roughness_ref_m: 3.0         # ~90th percentile of DEM roughness in the demo area (m)
+    dune_blocked: false          # walking on sand is slow but possible
+    dune_penalty: 1.5            # cost factor on dune-field edges when not blocked
+    rsl_blocked: true
+  car:
+    hard_limit_deg: 25.0         # Apollo rover design maximum (lunar); see slope_classes
+    alpha: 0.5
+    beta: 0.5
+    p: 2.0
+    mass_kg: 1000.0
+    c_rr: 0.25                   # rolling resistance on regolith
+    eta_drive: 0.6               # drivetrain efficiency
+    v_max_ms: 4.0
+    v_min_ms: 0.5
+    p_speed: 2.0                 # how fast speed drops towards the slope limit
+    p_aux_w: 500.0               # auxiliary power (W)
+    crew_n: 2
+    crew_o2_g_per_s: 0.0097      # per person, seated in a pressurised cabin
+    crew_co2_g_per_s: 0.0116
+    crew_water_g_per_s: 0.035
+    roughness_weight: 1.0
+    roughness_ref_m: 3.0
+    dune_blocked: true           # loose sand: the rover may bog down
+    dune_penalty: 1.0
+    rsl_blocked: true
+
+# Which sections the product owner has signed off. The API logs the unconfirmed ones at startup.
+# To confirm a section: check its numbers, set status to confirmed, and name the source (a document, a
+# person and a date). A confirmed section without a source is rejected.
+confirmation:
+  slope_classes:      {status: placeholder, source: "Candidate (not signed off): NASA Exploration EVA Testing and Analogs 2021 (ntrs.nasa.gov/citations/20210000827); Apollo LRV traverse metrics, LPSC 2026 (ntrs.nasa.gov/citations/20250011301). Lunar, not Mars."}
+  profiles.astronaut: {status: placeholder, source: "hard_limit_deg: as slope_classes. All other parameters are engineering guesses."}
+  profiles.car:       {status: placeholder, source: "hard_limit_deg: as slope_classes. All other parameters are engineering guesses."}
+  capacities:         {status: placeholder, source: ""}
+  weather.risk_bins:  {status: placeholder, source: ""}
+  hazards:            {status: placeholder, source: "RSL buffer and dune rules: engineering guesses (decided with the team 2026-11-15)."}

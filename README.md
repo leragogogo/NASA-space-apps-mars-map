@@ -9,10 +9,30 @@ cd backend
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-uvicorn main:app --reload --port 8000
+cp .env.example .env    # then set JWT_SECRET_KEY: python -c "import secrets; print(secrets.token_urlsafe(32))"
+uvicorn main:app --reload --port 8000 --env-file .env
 ```
 
+The backend refuses to start without `JWT_SECRET_KEY`. Users are stored in SQLite at `data/app.db` (created on first start;
+override with `MARS_DATABASE_URL`).
+
+Auth: `POST /api/auth/register` (JSON: `email`, `password`, `body_mass_kg`, `birth_year`), `POST /api/auth/login`
+(form fields `username` = email, `password`; returns a Bearer token), `GET`/`PATCH /api/users/me` (needs
+`Authorization: Bearer <token>`). In http://localhost:8000/docs use the "Authorize" button to log in.
+
 API docs: http://localhost:8000/docs
+
+Layer endpoints: `/api/get-layer-one` (imagery sources), `/api/get-layer-two` (relief; `/point?lon=&lat=`, `/walkability.png`),
+`/api/get-layer-three` (points of interest, `?category=`), `/api/get-layer-four?season=winter` (dust-storm risk),
+`/api/tiles/{source}/{z}/{row}/{col}`. A layer whose data is missing answers 503 with the script to run.
+
+Route: `POST /api/route` (login required). Minimal body `{"start": {"lon": .., "lat": ..}, "end": {"lon": .., "lat": ..}}`; `profile` is `auto` (default), `astronaut` or `car`; add `destinations` for a multi-stop route (visited in the order given). The walker's oxygen and water estimates use the logged-in user's body mass. The response's `mode` says which profile was chosen and why.
+
+Tests (pytest is in `requirements.txt`; tests mirror the code in `tests/<module>/`, real-data checks skip when `data/` is missing):
+
+```bash
+pytest
+```
 
 ## Frontend
 
@@ -22,7 +42,10 @@ npm install
 npm run dev
 ```
 
-App: http://localhost:5173 — requests to `/api/*` are proxied to the backend.
+App: http://localhost:5173 — requests to `/api/*` are proxied to the backend (`MARS_API_URL=http://localhost:8001 npm run dev`
+to use another backend port).
+
+Tests and lint: `npm test`, `npm run lint`. Details: `frontend/README.md`.
 
 ## Data
 
@@ -30,7 +53,9 @@ The datasets are not stored in git (`data/` is gitignored). After cloning, run t
 
 ```bash
 pip install -r scripts/requirements.txt
-python scripts/download_data.py        # DEM, map tiles, POI vectors and MDAD storm data -> data/raw/
+python scripts/download_data.py        # DEM, map tiles, POI vectors, MDAD storm data and the Layer 4 dust-storm grid -> data/raw/
 ```
+
+Script tests: `cd scripts && pytest`
 
 Project context for humans and agents: `context/skills/mars-mvp-data/SKILL.md`.
