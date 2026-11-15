@@ -48,3 +48,44 @@ def test_missing_file_raises_with_fix(tmp_path, fixture_settings):
     with pytest.raises(LayerDataError) as ex:
         ingest_weather(Settings(data_dir=tmp_path), grid_for(fixture_settings))
     assert "--only weather" in ex.value.message
+
+
+# ------------------------------------------------------------------ risk thresholds recorded by the weather script
+def _settings_with_bins(fixture_settings, tmp_path, recorded):
+    """A copy of the fixture weather files, with `recorded` as their risk_bins (None = not recorded)."""
+    import json
+    import shutil
+    from dataclasses import replace
+
+    root = tmp_path / "data"
+    shutil.copytree(fixture_settings.raw_dir / "weather", root / "raw" / "weather")
+    path = root / "raw" / "weather" / "context_weather_frames.geojson"
+    doc = json.loads(path.read_text())
+    if recorded is not None:
+        doc["risk_bins"] = recorded
+    path.write_text(json.dumps(doc))
+    return replace(fixture_settings, data_dir=root)
+
+
+def test_files_computed_with_other_thresholds_are_reported(fixture_settings, tmp_path, caplog):
+    settings = _settings_with_bins(fixture_settings, tmp_path, {"moderate_from": 2.0, "high_from": 6.0})
+    with caplog.at_level("WARNING", logger="app.layers.weather.ingest"):
+        ingest_weather(settings, grid_for(fixture_settings))
+    assert any("risk thresholds" in r.message and "--only weather" in r.message for r in caplog.records)
+
+
+@pytest.mark.parametrize("recorded", [{"moderate_from": 1.0, "high_from": 4.0}, None])
+def test_matching_or_unrecorded_thresholds_stay_silent(fixture_settings, tmp_path, caplog, recorded):
+    settings = _settings_with_bins(fixture_settings, tmp_path, recorded)  # None = a file from before thresholds were recorded
+    with caplog.at_level("WARNING", logger="app.layers.weather.ingest"):
+        ingest_weather(settings, grid_for(fixture_settings))
+    assert not caplog.records
+
+
+def test_the_configured_thresholds_are_what_is_compared(fixture_settings, tmp_path, caplog):
+    from dataclasses import replace
+    settings = replace(_settings_with_bins(fixture_settings, tmp_path, {"moderate_from": 2.0, "high_from": 6.0}),
+                       weather_risk_bins={"moderate_from": 2.0, "high_from": 6.0})  # the config now agrees with the files
+    with caplog.at_level("WARNING", logger="app.layers.weather.ingest"):
+        ingest_weather(settings, grid_for(fixture_settings))
+    assert not caplog.records

@@ -65,7 +65,7 @@ theta > theta_max  ->  cost = inf               # hard limit
 
 ## 5. Profile `astronaut`
 
-Hard limit: slope > 15 deg (config; unconfirmed).
+Hard limit: slope > 20 deg (`config/mars.yaml`; unconfirmed). Basis: the Artemis suit's stated capability of walking slopes up to 20 deg (lunar; NASA Exploration EVA Testing and Analogs, 2021). Keep it below ~24 deg, where the Minetti polynomial (valid to a 0.45 gradient) ends.
 
 Parameters: `body_mass_kg`, `suit_mass_kg`, `gear_mass_kg` (`m_total` = sum), `efficiency_factor` (default 1.0), `suit_mobility_penalty` (>= 1.0, empirical), `speed_factor`, `gravity_factor` (calibration for 3.71 m/s2, default 1.0), `P_suit_W`, `o2_leak_g_per_s`, `env_heat_W`, `rq` (~0.85), `o2_kJ_per_L` (~20.1), `h_cool_J_per_g`. No real values yet.
 
@@ -92,7 +92,7 @@ Notes:
 
 ## 6. Profile `car`
 
-Hard limit: slope > 35 deg (config; unconfirmed).
+Hard limit: slope > 25 deg (`config/mars.yaml`; unconfirmed). Basis: the Apollo rover's design maximum (20-23 deg in favourable conditions, max 25 deg; lunar; LPSC 2026 abstract). A heavier pressurized rover may need less.
 
 Parameters: `mass_kg`, `c_rr` (rolling resistance on regolith), `eta_drive`, `v_max`, `v_min`, `p_speed`, `P_aux_W`, `crew_n`, per-person rates `crew_o2_g_per_s`, `crew_co2_g_per_s`, `crew_water_g_per_s` (seated, pressurised cabin assumed), `g = 3.71`.
 
@@ -121,12 +121,13 @@ Everything below lives in **`config/mars.yaml`** (override the file with `MARS_C
 |---|---|
 | `profiles.<astronaut\|car>` | every model parameter: `hard_limit_deg`, `alpha`, `beta`, `p` and the parameters of sections 5 and 6 (names match `AstronautParams` / `CarParams`). A parameter that is not listed keeps the default in `app/routing/profiles/params.py`. |
 | `capacities.<profile>` | budgets the vehicle or suit carries, per resource (`time_s`, `o2_g`, `co2_g`, `water_g`, `energy_wh`); empty = no budget warnings |
-| `routing` | `reserve_margin` (share of each budget kept in reserve), `max_snap_distance_m` |
+| `routing` | `reserve_margin` (share of each budget kept in reserve), `max_snap_distance_m`, request limits `max_destinations` and the solver time budget `default_time_limit_s` / `min_time_limit_s` / `max_time_limit_s` (applied per request by the handler, not by the schema) |
+| `weather` | `risk_bins.moderate_from` / `high_from`: dust-storm risk thresholds in storm-days per Mars year. The weather files are computed with them (`scripts/weather`) and record them; after changing them re-run `python scripts/download_data.py --only weather --force` |
 | `slope_classes` | classes of the map overlay (display only); the loader checks that the steepest walkable class ends at the astronaut `hard_limit_deg` and the steepest drivable class at the car limit |
 | `grid`, `poi` | `grid.coarsen` (1 = native 200 m), `poi.sample_radius_km` |
 | `confirmation` | per section `status: placeholder\|confirmed` and a `source`; a confirmed section must name its source, and the API logs the unconfirmed sections at startup |
 
-Changing a profile parameter changes the graph's `formula_version`, so the saved graph is stale: rebuild it with `python -m app.graph`. Until then the API keeps the reference-mass numbers and warns (section 5, body mass).
+Changing a profile parameter changes the graph's `formula_version`, so the saved graph is stale: rebuild it with `python -m app.graph`. Until then the API keeps the reference-mass numbers and warns on each astronaut request (section 5, body mass). At startup the API also logs once when the graph was built with other profile parameters or on another grid than the configuration says (`app/graph/loader.py: staleness_warnings`).
 
 ## 9. Tests
 

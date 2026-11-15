@@ -166,8 +166,8 @@ def real():
 def test_real_graph_has_the_expected_shape(real):
     _, inputs, data, _ = real
     assert inputs.grid.shape == (1073, 1200) and data.n_edges > 10_000_000
-    assert (data.cost(ProfileId.ASTRONAUT) < np.inf).mean() > 0.8  # most terrain is walkable
-    assert (data.cost(ProfileId.CAR) < np.inf).mean() > 0.99
+    assert (data.cost(ProfileId.ASTRONAUT) < np.inf).mean() > 0.95  # 96.6 % of edges are below the 20 deg limit
+    assert (data.cost(ProfileId.CAR) < np.inf).mean() > 0.97  # 98.7 % are below the 25 deg limit
 
 
 @real_only

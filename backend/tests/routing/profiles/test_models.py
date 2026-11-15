@@ -106,16 +106,16 @@ def test_car_resources_are_driven_by_time_and_traction():
 
 def test_car_gets_no_traction_credit_downhill_and_slows_near_the_limit():
     car = CarModel()
-    steep_down = car.compute_edge_attrs(slope_geom(-30))
+    steep_down = car.compute_edge_attrs(slope_geom(-20))
     flat = car.compute_edge_attrs(slope_geom(0))
     assert steep_down["energy_wh"][0] < flat["energy_wh"][0]
     assert steep_down["energy_wh"][0] >= car.params.p_aux_w * steep_down["time_s"][0] / 3600 - 1e-9
-    assert car.speed_ms(np.radians(np.array([0.0, 20.0, 34.0]))).tolist() == sorted(
-        car.speed_ms(np.radians(np.array([0.0, 20.0, 34.0]))), reverse=True)
+    assert car.speed_ms(np.radians(np.array([0.0, 15.0, 24.0]))).tolist() == sorted(
+        car.speed_ms(np.radians(np.array([0.0, 15.0, 24.0]))), reverse=True)
 
 
 def test_the_car_climbs_what_the_astronaut_cannot():
-    g = slope_geom(25)
+    g = slope_geom(22)  # between the astronaut limit (20) and the car limit (25)
     assert np.isinf(AstronautModel().compute_edge_attrs(g)["cost"]).all()
     assert np.isfinite(CarModel().compute_edge_attrs(g)["cost"]).all()
 

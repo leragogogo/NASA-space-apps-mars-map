@@ -9,7 +9,7 @@ from typing import Callable
 
 from app.core.resources import ProfileId
 from app.graph.loader import RoutingContext
-from app.routing.contracts import RouteLimits, RoutePlan, RouteQuery
+from app.routing.contracts import RoutePlan, RouteQuery
 from app.routing.profiles.personalize import (graph_matches_models, path_resources_for_mass, reference_models,
                                              supports_body_mass)
 from app.routing.service import plan_route
@@ -67,6 +67,10 @@ def mass_resources(ctx: RoutingContext, profile: ProfileId, body_mass_kg: float 
 
 def handle_route_request(ctx: RoutingContext, req: RouteRequest, settings, weather=None,
                          body_mass_kg: float | None = None) -> RouteResponse:
+    limits = settings.route_limits
+    if len(req.destinations) > limits.max_destinations:
+        raise RouteRequestError(f"At most {limits.max_destinations} destinations are allowed per request "
+                                f"(got {len(req.destinations)}).")
     limit = settings.max_snap_distance_m
     start = snap(ctx, req.start.lon, req.start.lat, "start", limit)
     dests = [snap(ctx, d.lon, d.lat, f"destination {i}", limit) for i, d in enumerate(req.destinations)]
@@ -85,7 +89,7 @@ def handle_route_request(ctx: RoutingContext, req: RouteRequest, settings, weath
 
     query = RouteQuery(profile=ProfileId(req.profile), start_node=start.node,
                        destination_nodes=tuple(s.node for s in dests), end_mode=req.end_mode,
-                       end_node=end.node if end else None, time_limit_s=req.time_limit_s, season=req.season)
+                       end_node=end.node if end else None, time_limit_s=limits.clamp_time_limit(req.time_limit_s), season=req.season)
     resources_of, mass_used, mass_warning = mass_resources(ctx, query.profile, body_mass_kg, settings)
     plan = plan_route(ctx.graph, query, (settings.capacities or {}).get(ProfileId(req.profile).value),
                       settings.reserve_margin, resources_of)

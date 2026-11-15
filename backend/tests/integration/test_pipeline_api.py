@@ -232,6 +232,23 @@ def test_changing_a_profile_parameter_changes_the_resource_estimates_not_the_rou
     assert rb["resources"]["o2_g"] > ra["resources"]["o2_g"]  # a heavier suit burns more oxygen
 
 
+def test_request_limits_from_the_configuration_apply_through_the_api(tmp_path):
+    root = make_gentle_data(tmp_path / "data")
+    doc = yaml.safe_load(DEFAULT_CONFIG_PATH.read_text())
+    doc["routing"].update(max_destinations=1, default_time_limit_s=2, min_time_limit_s=1, max_time_limit_s=3)
+    config = tmp_path / "limits.yaml"
+    config.write_text(yaml.safe_dump(doc, sort_keys=False))
+    assert graph_cli(["--data-dir", str(root), "--config", str(config)]) == 0
+    with client_for(root, config) as c:
+        r = c.post("/api/route", json=route_body())  # two destinations, one allowed
+        assert r.status_code == 422 and "At most 1 destinations" in r.json()["detail"]
+        one = route_body(destinations=[node_point(2, 5)])
+        one.pop("time_limit_s")  # no time limit asked for: the configured default applies
+        assert c.post("/api/route", json=one).status_code == 200
+    with client_for(root) as c:  # the default configuration allows both destinations
+        assert c.post("/api/route", json=route_body()).status_code == 200
+
+
 def test_an_invalid_configuration_stops_the_graph_build_with_a_clear_message(tmp_path, capsys):
     bad = tmp_path / "bad.yaml"
     bad.write_text("profiles:\n  astronaut:\n    suit_mas_kg: 5\n")

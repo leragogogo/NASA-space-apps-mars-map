@@ -29,7 +29,8 @@ def test_the_shipped_file_loads_and_lists_every_model_parameter(shipped):
 
 
 def test_the_shipped_file_starts_unconfirmed_so_the_placeholders_are_visible():
-    assert set(load_settings().unconfirmed) == {"slope_classes", "profiles.astronaut", "profiles.car", "capacities"}
+    assert set(load_settings().unconfirmed) == {"slope_classes", "profiles.astronaut", "profiles.car", "capacities",
+                                                "weather.risk_bins"}
 
 
 def test_the_shipped_values_equal_the_built_in_defaults_when_nothing_was_changed():
@@ -135,20 +136,19 @@ def test_bad_slope_classes_are_rejected(tmp_path, shipped, change, message):
 
 
 def test_slope_classes_must_agree_with_the_profile_limits(tmp_path, shipped):
-    shipped["profiles"]["astronaut"]["hard_limit_deg"] = 12.0  # the map would still call 12-15 degrees walkable
-    with pytest.raises(ConfigError, match="steepest walkable class ends at 15"):
+    shipped["profiles"]["astronaut"]["hard_limit_deg"] = 12.0  # the map would still call 12-20 degrees walkable
+    with pytest.raises(ConfigError, match="steepest walkable class ends at 20"):
         load_settings(write(tmp_path, shipped))
-    shipped["profiles"]["astronaut"]["hard_limit_deg"] = 15.0
+    shipped["profiles"]["astronaut"]["hard_limit_deg"] = 20.0
     shipped["profiles"]["car"]["hard_limit_deg"] = 40.0
-    with pytest.raises(ConfigError, match="steepest vehicle class ends at 35"):
+    with pytest.raises(ConfigError, match="steepest vehicle class ends at 25"):
         load_settings(write(tmp_path, shipped))
 
 
 def test_changing_a_limit_together_with_the_classes_is_accepted(tmp_path, shipped):
-    shipped["profiles"]["astronaut"]["hard_limit_deg"] = 12.0
-    shipped["slope_classes"][1]["max_deg"] = 12
-    shipped["slope_classes"][2]["min_deg"] = 12
-    assert load_settings(write(tmp_path, shipped)).profiles["astronaut"]["hard_limit_deg"] == 12.0
+    shipped["profiles"]["astronaut"]["hard_limit_deg"] = 15.0  # a stricter astronaut limit ...
+    shipped["slope_classes"][2]["walkable"] = False  # ... with the 15-20 degree class no longer walkable
+    assert load_settings(write(tmp_path, shipped)).profiles["astronaut"]["hard_limit_deg"] == 15.0
 
 
 # ------------------------------------------------------------------ confirming a section
@@ -169,5 +169,40 @@ def test_bad_confirmation_entries_are_rejected(tmp_path, shipped, entry, message
 
 
 def test_a_section_without_a_confirmation_entry_counts_as_unconfirmed(tmp_path):
-    assert set(load_settings(write(tmp_path, {})).unconfirmed) == {"slope_classes", "profiles.astronaut",
-                                                                    "profiles.car", "capacities"}
+    assert set(load_settings(write(tmp_path, {})).unconfirmed) == {"slope_classes", "profiles.astronaut", "profiles.car",
+                                                                    "capacities", "weather.risk_bins"}
+
+
+# ------------------------------------------------------------------ request limits and weather thresholds
+def test_request_limits_and_weather_thresholds_reach_the_settings(tmp_path, shipped):
+    shipped["routing"].update(max_destinations=40, default_time_limit_s=5, min_time_limit_s=2, max_time_limit_s=60)
+    shipped["weather"]["risk_bins"] = {"moderate_from": 2.0, "high_from": 6.0}
+    s = load_settings(write(tmp_path, shipped))
+    limits = s.route_limits
+    assert (limits.max_destinations, limits.default_time_limit_s, limits.min_time_limit_s, limits.max_time_limit_s) \
+        == (40, 5.0, 2.0, 60.0)
+    assert limits.clamp_time_limit(None) == 5.0 and limits.clamp_time_limit(1000) == 60.0
+    assert s.weather_risk_bins == {"moderate_from": 2.0, "high_from": 6.0}
+
+
+def test_the_built_in_limits_match_the_routing_contract_defaults():
+    from app.routing.contracts import RouteLimits
+    assert Settings().route_limits == RouteLimits()  # the YAML and the code start from the same numbers
+    assert load_settings().route_limits == RouteLimits()
+
+
+@pytest.mark.parametrize("change, message", [
+    (lambda d: d["routing"].update(max_destinations=0), "max_destinations.*>= 1"),
+    (lambda d: d["routing"].update(max_destinations=2.5), "whole number"),
+    (lambda d: d["routing"].update(default_time_limit_s=50), "min_time_limit_s <= default_time_limit_s"),
+    (lambda d: d["routing"].update(min_time_limit_s=40), "min_time_limit_s <= default_time_limit_s"),
+    (lambda d: d["routing"].update(max_time_limit_s=0), "max_time_limit_s"),
+    (lambda d: d["weather"]["risk_bins"].update(high_from=0.5), "greater than moderate_from"),
+    (lambda d: d["weather"]["risk_bins"].update(moderate_from=-1), "moderate_from"),
+    (lambda d: d["weather"]["risk_bins"].update(extreme_from=9), "unknown key"),
+    (lambda d: d["weather"].update(colours={}), "unknown key"),
+])
+def test_bad_limits_and_thresholds_are_rejected(tmp_path, shipped, change, message):
+    change(shipped)
+    with pytest.raises(ConfigError, match=message):
+        load_settings(write(tmp_path, shipped))

@@ -9,7 +9,7 @@ from app.api.routes import auth, layers, route, tiles, users
 from app.core.config import Settings
 from app.core.configfile import load_settings
 from app.db.session import init_db, make_engine
-from app.graph.loader import load_routing_context
+from app.graph.loader import load_routing_context, staleness_warnings
 from app.layers.base import LayerUnavailable
 from app.layers.registry import build_registry
 
@@ -31,6 +31,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.session_factory = init_db(engine)
         try:
             app.state.routing = load_routing_context(settings)  # graph + KD-tree, once
+            for warning in staleness_warnings(app.state.routing, settings):
+                log.warning(warning)
         except LayerUnavailable as ex:
             app.state.routing = ex  # /api/route answers 503; layer endpoints keep working
         yield

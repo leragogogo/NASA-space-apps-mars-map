@@ -106,3 +106,21 @@ def test_unavailable_weather_gives_a_warning():
 def test_exceeded_budget_adds_warning():
     d = run(dests=(1,), settings=Settings(capacities={"car": {"time_s": 1.0}}))
     assert len(d.warnings) == 1 and "time_s" in d.warnings[0]
+
+
+def test_more_destinations_than_the_configured_maximum_raise():
+    with pytest.raises(RouteRequestError, match="At most 2 destinations"):
+        run(dests=(1, 2, 3), settings=Settings(max_destinations=2))
+    assert run(dests=(1, 2), settings=Settings(max_destinations=2)).stop_order  # exactly the maximum is fine
+
+
+def test_the_time_limit_follows_the_configured_range(monkeypatch):
+    seen = []
+    import app.routing.request as request_module
+    real = request_module.plan_route
+    monkeypatch.setattr(request_module, "plan_route",
+                        lambda graph, query, *a, **k: (seen.append(query.time_limit_s), real(graph, query, *a, **k))[1])
+    settings = Settings(default_time_limit_s=4.0, min_time_limit_s=2.0, max_time_limit_s=6.0)
+    for asked in (None, 0.1, 999.0):
+        handle_route_request(CTX, RouteRequest(profile="car", start=pt(0), destinations=[pt(1)], time_limit_s=asked), settings)
+    assert seen == [4.0, 2.0, 6.0]  # default, raised to the minimum, cut to the maximum

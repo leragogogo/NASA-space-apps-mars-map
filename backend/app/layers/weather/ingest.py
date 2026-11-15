@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 
 import numpy as np
 
@@ -29,6 +30,21 @@ def display_risk(p: dict) -> str | None:
     return (p.get("neighbour_estimate") or {}).get("risk")
 
 
+log = logging.getLogger(__name__)
+
+
+def risk_bins_mismatch(doc: dict, settings) -> str | None:
+    """A message when the files were computed with other risk thresholds than the configuration, else None.
+    Files from before the thresholds were recorded carry no `risk_bins` and are not checked."""
+    recorded = doc.get("risk_bins")
+    configured = settings.weather_risk_bins
+    if not isinstance(recorded, dict) or all(
+            abs(float(recorded.get(k, float("nan"))) - float(v)) < 1e-9 for k, v in configured.items()):
+        return None
+    return (f"The weather files were computed with risk thresholds {recorded} but the configuration says "
+            f"{dict(configured)}: the risk shown does not match. {FIX.replace('Run', 'Re-run').rstrip('.')} --force.")
+
+
 def weather_file(settings):
     return settings.raw_dir / "weather" / "context_weather_frames.geojson"
 
@@ -49,6 +65,8 @@ def ingest_weather(settings, grid: GridSpec) -> WeatherData:
         features = doc["features"]
     except (ValueError, KeyError, TypeError) as ex:
         raise LayerDataError("weather", f"Weather file unreadable: {ex}. {FIX}") from ex
+    if (stale := risk_bins_mismatch(doc, settings)):
+        log.warning(stale)
 
     cells: dict[tuple, dict[str, dict]] = {}  # bounds -> season name -> frame properties (insertion ordered)
     for f in features:

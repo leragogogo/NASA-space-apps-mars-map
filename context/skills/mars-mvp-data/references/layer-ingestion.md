@@ -56,7 +56,7 @@ Default grid: the 200 m DEM (1200 x 1073) at its native resolution (1,287,600 no
 - `ReliefData`: `grid`, `elev_m` float32 (NaN = nodata), `valid` bool, `slope_deg` float32 (node slope), optional `roughness_m` float32 (std-dev of elevation in a 3x3 window).
 - Resample to the grid with a NaN-aware block mean. Compute `slope_deg` **once**, from the resampled `elev_m` with central differences using the metric spacing. The graph builder derives signed edge gradients from the same `elev_m`. Display slope and routing slope therefore share one source.
 - Caveat: at 200-400 m the slope underestimates local steepness.
-- Service: slope-class overlay PNG + bounds (classes from config: 0-5 easy walk, 5-15 walkable, 15-25 vehicle only, 25-35 hard, >35 impassable), elevation at a point, hillshade tiles (served like imagery).
+- Service: slope-class overlay PNG + bounds (classes from `config/mars.yaml`: 0-5 easy walk, 5-15 walkable, 15-20 walkable with caution, 20-25 vehicle only, >25 impassable), elevation at a point, hillshade tiles (served like imagery).
 
 ### Points of interest (`app/layers/poi/`)
 - Reads: `data/raw/features/*.geojson` (see SKILL.md section 5, Layer 3).

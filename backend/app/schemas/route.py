@@ -3,12 +3,10 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 from app.core.resources import ProfileId
-from app.routing.contracts import DropReason, EndMode, RouteLimits
-
-_LIMITS = RouteLimits()
+from app.routing.contracts import DropReason, EndMode
 
 
 class LonLat(BaseModel):
@@ -19,16 +17,11 @@ class LonLat(BaseModel):
 class RouteRequest(BaseModel):
     profile: ProfileId
     start: LonLat
-    destinations: list[LonLat] = Field(min_length=1, max_length=_LIMITS.max_destinations)
+    destinations: list[LonLat] = Field(min_length=1)  # the maximum comes from the configuration, checked per request
     end_mode: EndMode = EndMode.ROUND_TRIP
     end: LonLat | None = None
-    time_limit_s: float = _LIMITS.default_time_limit_s
+    time_limit_s: float | None = None  # solver time budget in s; None = the configured default, clamped to the configured range
     season: Literal["autumn", "winter", "spring", "summer"] | None = None  # same keys as /api/get-layer-four
-
-    @field_validator("time_limit_s")
-    @classmethod
-    def _clamp_time(cls, v: float) -> float:
-        return _LIMITS.clamp_time_limit(v)
 
     @model_validator(mode="after")
     def _end_matches_mode(self):

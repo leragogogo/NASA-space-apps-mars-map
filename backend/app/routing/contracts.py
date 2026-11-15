@@ -32,7 +32,6 @@ class DropReason(StrEnum):
 @dataclass(frozen=True)
 class RouteLimits:
     max_destinations: int = 25
-    max_snap_distance_m: float = 1000.0
     default_time_limit_s: float = DEFAULT_TIME_LIMIT_S
     min_time_limit_s: float = 1.0
     max_time_limit_s: float = 30.0

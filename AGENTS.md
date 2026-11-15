@@ -35,7 +35,7 @@ The four layers follow `references/layer-ingestion.md`: `ingest.py` + `service.p
 ## Commands
 - Data: `pip install -r scripts/requirements.txt && python scripts/download_data.py` (`--only dem|tiles|pois|mdad|weather`, `--max-zoom N`, `--force`). The `weather` step computes the static weather layer into `data/raw/weather/`. Pipeline tests: `cd scripts && pytest`.
 - Backend tests: `cd backend && pip install -r requirements.txt && pytest`.
-- Configuration: edit `config/mars.yaml` (profile parameters, budgets, slope classes, routing limits; each section is `placeholder` until confirmed with a source); `MARS_CONFIG` or `--config` selects another file; rebuild the graph after changing a profile parameter.
+- Configuration: edit `config/mars.yaml` (profile parameters, budgets, slope classes, routing limits; each section is `placeholder` until confirmed with a source); `MARS_CONFIG` or `--config` selects another file; rebuild the graph after changing a profile parameter, and re-run `download_data.py --only weather --force` after changing the weather risk thresholds. The API logs a stale graph or stale weather files at startup.
 - Backend: see README (uvicorn on :8000; needs `JWT_SECRET_KEY`, copy `backend/.env.example` to `backend/.env`). Frontend: see README (Vite on :5173, proxies `/api/*`).
 
 ## Development rules (all agents; full text in SKILL.md section 11)

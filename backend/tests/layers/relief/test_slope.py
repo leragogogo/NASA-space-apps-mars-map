@@ -36,5 +36,5 @@ def test_slope_degrees_is_the_shared_slope_deg():
 
 
 def test_classify_edges_and_nodata():
-    s = np.array([0, 4.99, 5, 14.9, 15, 24.9, 25, 35, 60, np.nan])
-    assert classify(s, SLOPE_CLASSES).tolist() == [0, 0, 1, 1, 2, 2, 3, 4, 4, -1]
+    s = np.array([0, 4.99, 5, 14.9, 15, 19.9, 20, 24.9, 25, 60, np.nan])
+    assert classify(s, SLOPE_CLASSES).tolist() == [0, 0, 1, 1, 2, 2, 3, 3, 4, 4, -1]

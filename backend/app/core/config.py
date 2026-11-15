@@ -30,9 +30,9 @@ STATUS_CONFIRMED = "confirmed"
 SLOPE_CLASSES = (
     SlopeClass("easy_walk", "Easy walk", 0, 5, "#1a9850", True, True),
     SlopeClass("walkable", "Walkable", 5, 15, "#91cf60", True, True),
-    SlopeClass("vehicle_only", "Vehicle only", 15, 25, "#fee08b", False, True),
-    SlopeClass("vehicle_limit", "Hard / vehicle limit", 25, 35, "#fc8d59", False, True),
-    SlopeClass("impassable", "Impassable", 35, 90, "#d73027", False, False),
+    SlopeClass("walkable_caution", "Walkable with caution", 15, 20, "#d9ef8b", True, True),
+    SlopeClass("vehicle_only", "Vehicle only", 20, 25, "#fee08b", False, True),
+    SlopeClass("impassable", "Impassable", 25, 90, "#d73027", False, False),
 )
 
 
@@ -92,11 +92,26 @@ class Settings:
     capacities: dict = field(default_factory=dict)
     reserve_margin: float = 0.2
     max_snap_distance_m: float = 1000.0
+    # Request limits (routing section of config/mars.yaml): destinations per request and the solver time budget.
+    max_destinations: int = 25
+    default_time_limit_s: float = 10.0
+    min_time_limit_s: float = 1.0
+    max_time_limit_s: float = 30.0
+    # Dust-storm risk thresholds in storm-days per Mars year (weather section of config/mars.yaml). The weather
+    # files are computed with them by scripts/weather; the API only compares them with what the files record.
+    weather_risk_bins: dict = field(default_factory=lambda: {"moderate_from": 1.0, "high_from": 4.0})
     # Per-profile model parameters from the configuration file ({profile: {parameter: value}}); parameters that are
     # not listed keep the defaults of app/routing/profiles/params.py.
     profiles: dict = field(default_factory=dict)
     # Configuration sections the product owner has not signed off yet (see config/mars.yaml, `confirmation`).
     unconfirmed: tuple = ()
+
+    @property
+    def route_limits(self):
+        """The request limits as a `RouteLimits` (imported here to keep app.core free of routing imports)."""
+        from app.routing.contracts import RouteLimits
+        return RouteLimits(max_destinations=self.max_destinations, default_time_limit_s=self.default_time_limit_s,
+                           min_time_limit_s=self.min_time_limit_s, max_time_limit_s=self.max_time_limit_s)
 
     @property
     def raw_dir(self) -> Path:

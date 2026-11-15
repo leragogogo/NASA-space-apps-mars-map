@@ -24,7 +24,7 @@ An interactive Mars map for **astronauts and mission planners**, built from stac
   ```
 - Chosen from 9 candidate regions by an overlap score of servable layers, relief coverage and POI density. It scored **0.89**, ahead of Mawrth Vallis (0.64), Deuteronilus (0.60) and Gusev (0.54). See `outputs/region_scores.csv`.
 - Relief: −5,401 m to +4,596 m (**~10 km of relief**). Canyon walls, mesas and a chasma floor.
-- Slope at 200 m DEM resolution: 53 % 0–5°, 33 % 5–15°, 11 % 15–25°, 3.5 % 25–35°, 0.4 % >35°. This **underestimates** local steepness.
+- Slope at 200 m DEM resolution (measured on the 1,287,600 nodes): 52.8 % 0–5°, 32.7 % 5–15°, 6.1 % 15–20°, 4.6 % 20–25°, 3.5 % 25–35°, 0.4 % >35°. So 8.5 % of the nodes are steeper than the astronaut limit (20°) and 3.8 % steeper than the car limit (25°); as graph edges, 96.6 % are passable for the astronaut and 98.7 % for the car. This **underestimates** local steepness.
 - AOI latitude is ~12° S, so **seasons are named for the southern hemisphere**.
 
 ## 4. Access endpoints (all public, no auth)
@@ -62,7 +62,7 @@ An interactive Mars map for **astronauts and mission planners**, built from stac
 | Hi-res visual | MRO CTX East Melas Hillshade / DEM | `CTX_Shade_East_Melas`, `CTX_DEM_East_Melas` (WMTS) | ~20 m/px, strips only (~45–85 %). **The DEM tiles are greyscale pictures, not values** |
 | Hi-res slope picture | CTX Color Slope tiles | `CTX_ClrSlope_8bit_*` (e.g. `..._12S290E_24mp_D18_034250_1676_D21_035450_1674`) | Narrow strips |
 
-- Slope classes used so far (**unconfirmed by product owner, keep configurable**): 0–5° easy walk · 5–15° walkable · 15–25° vehicle only · 25–35° hard / vehicle limit · >35° impassable. They now live in `config/mars.yaml` (`slope_classes`, with the profile limits and budgets); see `references/edge-cost-model.md` section 8.
+- Slope classes used so far (**unconfirmed by product owner, keep configurable**): 0–5° easy walk · 5–15° walkable · 15–20° walkable with caution · 20–25° vehicle only · >25° impassable. Basis (all **lunar**; no Mars-specific limit was found): 20° is the Artemis suit's stated walking capability (NASA Exploration EVA Testing and Analogs, 2021; Apollo 15 EVAs reached ~17°) and 25° is the Apollo rover's design maximum (20–23° in favourable conditions; Apollo 15/16 traverses peaked at 22.1° and 24.7°, LPSC 2026). The astronaut limit must stay below ~24° (the Minetti model is valid to a 0.45 gradient). They now live in `config/mars.yaml` (`slope_classes`, with the profile limits and budgets); see `references/edge-cost-model.md` section 8.
 - **Limitation:** the 24 m CTX DEM and Slope products (e.g. `CTX_DEM_12S290E_...`) appear in the Trek catalogue but have **no WMTS or value service**. For sharper slopes, get the source DTMs from PDS / USGS Astrogeology.
 - Shelter candidates (pits, skylights) are not a Trek layer. Derive local depressions from the DEM, or mark this as future work.
 
@@ -90,7 +90,7 @@ An interactive Mars map for **astronauts and mission planners**, built from stac
 - **No storm outlines.** Footprint = ellipse at the centroid. The N–S semi-axis comes from the lat span; the E–W semi-axis is solved from the area. Storm ID = `subphase + "_" + Member ID`.
 - **Rejected:** ESA PSA "Mars maps" (`cosmos.esa.int/web/psa/mars-maps`) only has OMEGA albedo and mineral maps. Its nanophase-ferric map shows settled dust, not storms, so it has no seasonal or weather content. Trek also has no weather layer.
 - Seasons (Ls quarters, southern-hemisphere names): Autumn 0–90, Winter 90–180, Spring 180–270 (perihelion, global-storm season), Summer 270–360.
-- Risk thresholds (storm-days per Mars year): **Low < 1 · Moderate 1–4 · High ≥ 4** (configurable).
+- Risk thresholds (storm-days per Mars year): **Low < 1 · Moderate 1–4 · High ≥ 4**, set in `config/mars.yaml` (`weather.risk_bins`, unconfirmed). The weather files are *computed* with them (`scripts/weather`, run by `download_data.py --only weather`) and record the thresholds they used (`risk_bins` in both JSON files); the API logs a warning at startup when the files and the configuration disagree. After changing them re-run `python scripts/download_data.py --only weather --force`.
 
 **AOI results** (`outputs/weather/aoi_weather_frames.json`):
 | Season | Confidence | Value | Label |
@@ -246,7 +246,7 @@ requirements.txt                   venv packages (requests, pandas, numpy, pillo
 - Four independent layer endpoints (base imagery, relief, points of interest, weather) plus one route endpoint: `POST /api/route`, a **multi-destination** route for a profile (`astronaut` | `car`; replaces the earlier `walker` | `vehicle` naming). Full spec in section 10.
 - **Layer ingestion modules** (`backend/app/layers/<layer>/`): each turns `data/raw/` files into normalised, validated data aligned to one shared `GridSpec` (`ingest.py`), plus a client-facing half (`service.py`). The graph builder consumes only that output and never reads `data/raw/` itself. Imagery is tile-serving only; the graph does not use it. **Contract, per-layer fields, fixtures and parallel work packages: `references/layer-ingestion.md`.**
 - **Master graph** (`backend/app/graph/`): one directed graph built offline from the layer getters' data and stored as **flat NumPy arrays** (`src`, `dst`, and one array per profile and attribute), not as Python objects. Every directed edge carries, **for each profile, a routing `cost` plus resource consumption** (time, O2, CO2, water, energy). Model and formulas: `references/edge-cost-model.md`. Nodes carry elevation, slope, nearby points of interest, and the four seasonal risk values with their confidence. **Season is a query parameter, not part of the graph or the edge weights.** The graph is built on the relief getter's **native 200 m grid** (1,287,600 nodes, 10,287,166 directed edges with 8 neighbours); `--coarsen N` averages it down if ever needed. Persist the built graph under `data/graph/` (gitignored). (This supersedes the earlier "implicit numpy grid + A*" decision.)
-- **Routing engine** (`backend/app/routing/`): per-profile cost formulas, the SciPy cost matrix and the OR-Tools solver. Slope classes (0-5 easy, 5-15 walkable, 15-25 vehicle only, 25-35 hard/vehicle limit, >35 impassable) are unconfirmed by the product owner, so keep them configurable.
+- **Routing engine** (`backend/app/routing/`): per-profile cost formulas, the SciPy cost matrix and the OR-Tools solver. Slope classes (0-5 easy, 5-15 walkable, 15-20 walkable with caution, 20-25 vehicle only, >25 impassable) are unconfirmed by the product owner, so keep them configurable (`config/mars.yaml`).
 - **Caveats for routing:** weather risk is almost uniform inside the AOI (1 deg cells within +-10 %), so it acts as a season-wide warning, not a route discriminator. The 200 m DEM underestimates local slope.
 - **Tiles** (`backend/app/tiles/`): serve `data/raw/tiles/<label>/<z>/<row>/<col>.<ext>` straight from disk (static files). No upstream fetching; a missing tile returns 404 or a transparent tile.
 
@@ -296,8 +296,8 @@ A user picks a profile, a start, several destinations and optionally an end. The
 ### Profiles
 | Profile | Who | Hard limit (from the slope classes, configurable) |
 |---|---|---|
-| `astronaut` | walking EVA crew | slope > 15° → ∞ |
-| `car` | rover / vehicle | slope > 35° → ∞ |
+| `astronaut` | walking EVA crew | slope > 20° → ∞ |
+| `car` | rover / vehicle | slope > 25° → ∞ |
 
 - Profile ids are **`astronaut` and `car`** everywhere (graph keys, API, config).
 - Each profile has **its own cost formula**, which combines every relevant parameter: 3D distance, signed slope (uphill ≠ downhill), roughness, energy and so on. **Besides `cost`, each profile also stores per-edge resource consumption** (`time_s`, `o2_g`, `co2_g`, `water_g`, `energy_wh`). Formulas, units and parameters: `references/edge-cost-model.md`.
@@ -339,7 +339,7 @@ Request:
   "destinations": [{"lon": -69.8, "lat": -11.2}, {"lon": -70.4, "lat": -12.0}],
   "end_mode": "round_trip",        // "round_trip" (default) | "fixed" | "open"
   "end": null,                     // required only when end_mode = "fixed"
-  "time_limit_s": 10,              // optional, default DEFAULT_TIME_LIMIT_S = 10 (app/routing/contracts.py), clamped to 1..30
+  "time_limit_s": 10,              // optional; default and allowed range come from config/mars.yaml (routing.default/min/max_time_limit_s, 10 and 1..30 as shipped); the handler clamps it. At most routing.max_destinations (25) destinations: more is 422
   "season": "winter"  // autumn | winter | spring | summer (same keys as /api/get-layer-four); optional, for weather warnings only, never for weights
 }
 ```
