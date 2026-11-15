@@ -8,7 +8,6 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-import tifffile
 
 from app.core.config import Settings
 from app.core.resources import PROFILES, RESOURCES, ProfileId
@@ -25,7 +24,7 @@ from app.routing.contracts import EndMode, RouteQuery
 from app.routing.graph import RoutingGraph
 from app.routing.profiles import default_models
 from app.routing.service import plan_route
-from tests.conftest import DEM_SHAPE, build_fixture_data
+from tests.integration.helpers import make_gentle_data
 
 REAL_DATA = Path(__file__).resolve().parents[3] / "data"
 WINTER = SEASONS[1]
@@ -34,14 +33,7 @@ WINTER = SEASONS[1]
 # ----------------------------------------------------------------------------------- synthetic
 @pytest.fixture(scope="module")
 def synthetic_settings(tmp_path_factory):
-    root = build_fixture_data(tmp_path_factory.mktemp("graph_data"))
-    # The shared fixture DEM is a steep 10 deg plane (tens of km high at this size); use a gentle surface
-    # so elevations stay plausible and both profiles can drive on it.
-    rows, cols = DEM_SHAPE
-    y, x = np.mgrid[0:rows, 0:cols]
-    tifffile.imwrite(root / "raw/dem/dem_blend200m_aoi.tif",
-                     (1200.0 * np.sin(x / 3.0) + 400.0 * np.cos(y / 2.0)).astype("float32"))
-    return Settings(data_dir=root, jwt_secret_key="test")
+    return Settings(data_dir=make_gentle_data(tmp_path_factory.mktemp("graph_data")), jwt_secret_key="test")
 
 
 @pytest.fixture(scope="module")
