@@ -1,4 +1,9 @@
 # Mars Map
+Live app: [https://mars-map.design](https://mars-map.design)
+
+Mars Map is an interactive planning map for astronauts and mission planners. It covers East Melas / Coprates Chasma in Valles Marineris and stacks four layers built from open NASA and Harvard Dataverse data: high-resolution imagery, terrain walkability from slope, scientific points of interest, and seasonal dust-storm risk. Users can plan a route through several destinations on foot or by rover. For each route, they get an estimate of travel time, oxygen, CO₂, water, and energy, personalised to their body mass. Wherever the data is too thin to be reliable, the map says so. 
+
+The map layers are available without an account. To use the route planner you need to sign up first, because it uses your body mass to estimate the oxygen, CO₂ and water each route needs. The application is not optimized for phones.
 
 React (Vite) frontend + FastAPI backend.
 
