@@ -56,4 +56,4 @@ def test_sample_all_seasons(weather):
 def test_missing_files(tmp_path):
     with pytest.raises(LayerUnavailable) as ex:
         WeatherGetter(Settings(data_dir=tmp_path))
-    assert ex.value.fix == "python scripts/build_weather/build_weather.py"
+    assert ex.value.fix == "python scripts/download_data.py --only weather"

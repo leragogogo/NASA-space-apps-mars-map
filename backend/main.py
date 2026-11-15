@@ -21,6 +21,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.layers = build_registry(settings)  # loads every layer once
         engine = make_engine(settings.database_url)
         app.state.session_factory = init_db(engine)
+        # TODO: also load the routing graph here (app.graph.lifespan.routing_graph_lifespan) once the route
+        # endpoint lands. Run `python -m app.graph` first: the app refuses to start without graph.npz.
         yield
         engine.dispose()
 

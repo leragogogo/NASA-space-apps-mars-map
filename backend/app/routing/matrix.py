@@ -1,15 +1,15 @@
-"""Step 4: cost matrix between all route points (rustworkx). Spec: SKILL.md section 10."""
+"""Step 4: cost matrix between all route points (SciPy Dijkstra on arrays). Spec: SKILL.md section 10."""
 
 from __future__ import annotations
 
-import math
 from typing import Sequence
 
 import numpy as np
-import rustworkx as rx
 from app.core.resources import ProfileId
 from app.routing.contracts import CostMatrix
 from app.routing.graph import RoutingGraph
+
+CHUNK = 8  # sources per Dijkstra call: bounds the (sources x nodes) distance and predecessor arrays
 
 
 def build_cost_matrix(
@@ -17,24 +17,23 @@ def build_cost_matrix(
 ) -> CostMatrix:
     """One Dijkstra per point over the profile's `cost`.
 
-    A target missing from the result (not connected) or reached only over inf edges stays
-    unreachable: the cell is inf and no leg path is saved.
+    Impassable (inf) edges are not in the search graph, so a target that can only be reached over them
+    is unreachable: the cell is inf and no leg path is saved.
     """
-    edge_costs = routing_graph.cost[ProfileId(profile)]
+    profile = ProfileId(profile)
     n_points = len(point_nodes)
     matrix = np.full((n_points, n_points), np.inf)
     np.fill_diagonal(matrix, 0.0)
     legs: dict[tuple[int, int], tuple[int, ...]] = {}
-    for from_point, source in enumerate(point_nodes):
-        paths = rx.dijkstra_shortest_paths(
-            routing_graph.graph, source, weight_fn=edge_costs.__getitem__
-        )
-        for to_point, target in enumerate(point_nodes):
-            if from_point == to_point or target not in paths:
-                continue
-            path = tuple(paths[target])
-            cost = routing_graph.path_cost(profile, path)
-            if math.isfinite(cost):
-                matrix[from_point, to_point] = cost
-                legs[(from_point, to_point)] = path
+    for start in range(0, n_points, CHUNK):
+        chunk = list(point_nodes[start : start + CHUNK])
+        dist, pred = routing_graph.shortest_paths(profile, chunk)
+        for k, source in enumerate(chunk):
+            from_point = start + k
+            for to_point, target in enumerate(point_nodes):
+                d = dist[k, target]
+                if from_point == to_point or not np.isfinite(d):
+                    continue
+                matrix[from_point, to_point] = d
+                legs[(from_point, to_point)] = routing_graph.trace_path(pred[k], int(source), int(target))
     return CostMatrix(nodes=tuple(point_nodes), matrix=matrix, legs=legs)

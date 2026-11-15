@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 REPO_DATA = Path(__file__).resolve().parents[3] / "data"  # backend/tests/integration/ -> repo root
 pytestmark = pytest.mark.skipif(
     not (REPO_DATA / "raw/dem/dem_blend200m_aoi.tif").is_file()
-    or not (REPO_DATA / "derived/weather/context_weather_frames.geojson").is_file(),
+    or not (REPO_DATA / "raw/weather/context_weather_frames.geojson").is_file(),
     reason="real data not downloaded / weather not built")
 
 

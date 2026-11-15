@@ -1,6 +1,6 @@
 ---
 name: mars-mvp-data
-description: Project context, requirements and exact datasets for the Mars astronaut-map MVP: a hyper-local, 4-layer map. It shows base imagery, relief/walkability and points of interest for East Melas Chasma, plus a seasonal dust-storm risk layer on a 1° grid over the wider Valles Marineris area. Use it whenever building, extending or debugging any part of this project: fetching NASA Trek tiles or vectors, computing slopes, querying MDAD storm data, showing risk and confidence labels, writing a layer ingestion module, defining per-profile edge costs and resource use (oxygen, water, energy), or building the multi-destination route planner (rustworkx graph + Google OR-Tools, per-profile edge weights for astronaut and car). Bundles the working Python scripts (scripts/01-08) as a reference implementation.
+description: Project context, requirements and exact datasets for the Mars astronaut-map MVP: a hyper-local, 4-layer map. It shows base imagery, relief/walkability and points of interest for East Melas Chasma, plus a seasonal dust-storm risk layer on a 1° grid over the wider Valles Marineris area. Use it whenever building, extending or debugging any part of this project: fetching NASA Trek tiles or vectors, computing slopes, querying MDAD storm data, showing risk and confidence labels, writing a layer ingestion module, defining per-profile edge costs and resource use (oxygen, water, energy), or building the multi-destination route planner (NumPy/SciPy graph + Google OR-Tools, per-profile edge weights for astronaut and car). Bundles the working Python scripts (scripts/01-08) as a reference implementation.
 ---
 
 # Mars MVP: data skill
@@ -183,7 +183,7 @@ Every frame gets `confidence`:
   - Install the deps: `pip install -r requirements.txt`.
   - Run in order: 01 → 08. Scripts 04–08 import constants (`REGIONS`, `AOI`, `SEASONS`, `CONTEXT`) from earlier scripts by file name, so keep the `NN_` names.
   - Scripts 01-03 and 05 query Trek and ArcGIS when run, and 06 reads `data/raw/mdad/MDAD_original`. They are exploration tools only; the application never calls those APIs (see section 9).
-- **Canonical source:** `data-exploration/scripts/`. When a script changes there, re-copy it here (`cp scripts/0*.py context/skills/mars-mvp-data/scripts/`) so other agents don't use stale logic.
+- **Canonical source:** the old `data-exploration` folder no longer exists, so the copies in `context/skills/mars-mvp-data/scripts/` are now the only ones. Edit them here.
 
 ### Files in the data-exploration repo
 ```
@@ -204,7 +204,7 @@ requirements.txt                   venv packages (requests, pandas, numpy, pillo
 ## 8. Open questions / next steps
 - Confirm slope thresholds for walking vs vehicles with the product owner.
 - Confirm the per-profile cost formulas, resource formulas, units and parameter values (suit mass, capacities, rates). Proposed in `references/edge-cost-model.md`; all constants are placeholders.
-- Decide how the weather layer file reaches `data/raw/weather/` (copy from `data-exploration/outputs/weather/` or run scripts 06 -> 07 from the download step).
+- ~~Weather layer file~~ **done:** the data pipeline's `weather` step (`scripts/weather/`) regenerates `data/raw/weather/context_weather_frames.geojson` from the downloaded MDAD file. Its output reproduces the documented results (confidence counts per season, AOI frames).
 - Where is the habitat (needed for walk-back feasibility, future)?
 - Future, not in the MVP (details in `references/edge-cost-model.md` section 10): walk-back feasibility filter, solar-particle-event shelter reachability, per-astronaut calibration from heart rate, higher-resolution slopes (24 m CTX DTMs, optionally via GDAL), shelter-candidate detection from the DEM.
 - Is the 200 m DEM enough for the demo, or should we pull the 24 m CTX DTMs from PDS for a sub-area?
@@ -219,7 +219,7 @@ requirements.txt                   venv packages (requests, pandas, numpy, pillo
 - Shelter detection (pits and depressions) from the DEM is not yet implemented.
 
 ## 8. Data download pipeline (repo root)
-`python scripts/download_data.py` (deps: `scripts/requirements.txt`) fetches everything the MVP uses into `data/raw/` (gitignored). Re-runs skip existing files; `--force` re-downloads; `--only dem|tiles|pois|mdad` limits it; `--max-zoom N` limits tile volume (default z5-9, ~1,000 tiles, ~46 MB total).
+`python scripts/download_data.py` (deps: `scripts/requirements.txt`) fetches everything the MVP uses into `data/raw/` (gitignored). Re-runs skip existing files; `--force` re-downloads; `--only dem|tiles|pois|mdad|weather` limits it; `--max-zoom N` limits tile volume (default z5-9, ~1,000 tiles, ~46 MB total).
 
 | Layer | Output | Source |
 |---|---|---|
@@ -227,12 +227,13 @@ requirements.txt                   venv packages (requests, pandas, numpy, pillo
 | 1, 2, 3 imagery | `data/raw/tiles/<label>/<z>/<row>/<col>.png\|jpg` | Trek WMTS: Coprates mosaic, CTX global, HiRISE, colour hillshade, CTX hillshade, CRISM polysulfate |
 | 3 POIs | `data/raw/features/<service>__<layerId>.geojson` | Trek ArcGIS MapServers (empty layers are not written) |
 | 4 weather input | `data/raw/mdad/MDAD_original` | Harvard Dataverse file 3607412 |
+| 4 weather layer | `data/raw/weather/{context_weather_frames.geojson, aoi_weather_frames.json, observation_gaps.csv}` | computed from MDAD by `scripts/weather/` (pandas + scipy; ~5 s) |
 | log | `data/raw/manifest.json` | counts per dataset |
 
 - Tile row/col are WMTS indices with a top-left origin (same as XYZ rows). Read `TileWidth` per layer: 512 px for CTX global and HiRISE, 256 px for the rest.
 - A few tiles are genuinely unavailable (e.g. some tiles of the CTX global mosaic intermittently return HTTP 500). They are reported as `unavailable`/`missing`, not failures.
 - **13 CTX global mosaic tiles over the AOI (z5, z8, z9) are stored truncated on Trek:** HTTP 200 with a matching Content-Length, but the image is cut off, and every re-download returns the same bytes. The script fully decodes every tile (fresh and already on disk) and does not keep ones that fail; they are reported as `corrupt` and the app treats them as missing. The primary Coprates mosaic is unaffected.
-- The delivered weather layer (`context_weather_frames.geojson`) is derived from the MDAD file by skill scripts 06 -> 07; the download script only fetches the input. `python scripts/build_weather/build_weather.py` ports that logic into the repo and writes `data/derived/weather/context_weather_frames.geojson` + `aoi_weather_frames.json`; its test checks the output is identical to the skill scripts'.
+- The weather layer is **computed, not downloaded**: the `weather` step runs `scripts/weather/build.py` (a port of skill scripts 06 -> 07 without their plotting and imaging dependencies) on `data/raw/mdad/MDAD_original`. Run it alone with `python scripts/download_data.py --only weather` (add `--force` to recompute). Tests: `cd scripts && pytest`. The API getter and the graph ingestion both read `data/raw/weather/`.
 
 ## 9. Application architecture (decided)
 
@@ -244,8 +245,8 @@ requirements.txt                   venv packages (requests, pandas, numpy, pillo
 ### Backend (FastAPI)
 - Four independent layer endpoints (base imagery, relief, points of interest, weather) plus one route endpoint: `POST /api/route`, a **multi-destination** route for a profile (`astronaut` | `car`; replaces the earlier `walker` | `vehicle` naming). Full spec in section 10.
 - **Layer ingestion modules** (`backend/app/layers/<layer>/`): each turns `data/raw/` files into normalised, validated data aligned to one shared `GridSpec` (`ingest.py`), plus a client-facing half (`service.py`). The graph builder consumes only that output and never reads `data/raw/` itself. Imagery is tile-serving only; the graph does not use it. **Contract, per-layer fields, fixtures and parallel work packages: `references/layer-ingestion.md`.**
-- **Master graph** (`backend/app/graph/`): a **single rustworkx `PyDiGraph`** built offline from the layer ingestion output. Every directed edge carries, **for each profile, a routing `cost` plus resource consumption** (time, O2, CO2, water, energy), stored as struct-of-arrays. Model and formulas: `references/edge-cost-model.md`. Nodes carry elevation, slope, nearby points of interest, and the four seasonal risk values with their confidence. **Season is a query parameter, not part of the graph or the edge weights.** Native DEM is 200 m (~1.3M nodes over the AOI); start coarsened to ~400 m (~330k nodes, ~2.6M directed edges with 8 neighbours), configurable. Persist the built graph under `data/graph/` (gitignored). (This supersedes the earlier "implicit numpy grid + A*" decision.)
-- **Routing engine** (`backend/app/routing/`): per-profile cost formulas, the rustworkx cost matrix and the OR-Tools solver. Slope classes (0-5 easy, 5-15 walkable, 15-25 vehicle only, 25-35 hard/vehicle limit, >35 impassable) are unconfirmed by the product owner, so keep them configurable.
+- **Master graph** (`backend/app/graph/`): one directed graph built offline from the layer getters' data and stored as **flat NumPy arrays** (`src`, `dst`, and one array per profile and attribute), not as Python objects. Every directed edge carries, **for each profile, a routing `cost` plus resource consumption** (time, O2, CO2, water, energy). Model and formulas: `references/edge-cost-model.md`. Nodes carry elevation, slope, nearby points of interest, and the four seasonal risk values with their confidence. **Season is a query parameter, not part of the graph or the edge weights.** The graph is built on the relief getter's **native 200 m grid** (1,287,600 nodes, 10,287,166 directed edges with 8 neighbours); `--coarsen N` averages it down if ever needed. Persist the built graph under `data/graph/` (gitignored). (This supersedes the earlier "implicit numpy grid + A*" decision.)
+- **Routing engine** (`backend/app/routing/`): per-profile cost formulas, the SciPy cost matrix and the OR-Tools solver. Slope classes (0-5 easy, 5-15 walkable, 15-25 vehicle only, 25-35 hard/vehicle limit, >35 impassable) are unconfirmed by the product owner, so keep them configurable.
 - **Caveats for routing:** weather risk is almost uniform inside the AOI (1 deg cells within +-10 %), so it acts as a season-wide warning, not a route discriminator. The 200 m DEM underestimates local slope.
 - **Tiles** (`backend/app/tiles/`): serve `data/raw/tiles/<label>/<z>/<row>/<col>.<ext>` straight from disk (static files). No upstream fetching; a missing tile returns 404 or a transparent tile.
 
@@ -276,7 +277,7 @@ backend/
   app/layers/{base_imagery,relief,poi,weather}/   one ingestion module per layer (ingest.py + service.py); shared `contracts.py`, `fakes.py`, `validate.py` live in `app/layers/` (done)
   app/tiles/                    serves tiles from data/raw/tiles (static, no upstream calls)
   app/graph/                    master graph builder (offline) and loader (startup), see section 10
-  app/routing/                  profiles + weight formulas, cost matrix (rustworkx), solver (OR-Tools), route assembly
+  app/routing/                  profiles + weight formulas, cost matrix (SciPy Dijkstra on arrays), solver (OR-Tools), route assembly
   tests/
 frontend/src/
   api/                          the only place that talks to the backend
@@ -284,13 +285,13 @@ frontend/src/
   features/{map,layers,route}/  Leaflet map, layer toggles/season switcher, route UI
   hooks/, config/, utils/
 ```
-Step 0 is done: the shared contracts exist and are tested (see `references/layer-ingestion.md` section 7). Package G (routing engine) is done (`app/routing/`, see section 10 "Implementation"). All other module folders are still empty placeholders (`.gitkeep`).
+Step 0 is done: the shared contracts exist and are tested (see `references/layer-ingestion.md` section 7). The graph is built from the layer getters (`app/graph/getters/`) and the profile formulas are in `app/routing/profiles/`; getters, graph and routing engine are integrated and tested end to end (`tests/integration/test_graph_integration.py`). Package G (routing engine) is done (`app/routing/`, see section 10 "Implementation"). All other module folders are still empty placeholders (`.gitkeep`).
 
-## 10. Multi-destination routing (decided: rustworkx + Google OR-Tools)
+## 10. Multi-destination routing (decided: SciPy Dijkstra on NumPy arrays + Google OR-Tools)
 A user picks a profile, a start, several destinations and optionally an end. The backend returns one continuous path that visits the reachable destinations in the best order it finds, and reports the ones it had to drop.
-- **rustworkx** computes shortest paths on the terrain graph.
+- **`scipy.sparse.csgraph.dijkstra`** computes shortest paths on the terrain graph, which is held as NumPy arrays plus one CSR matrix per profile. (rustworkx was used first; its per-edge Python callback and per-edge Python objects made the 10 M-edge 200 m graph take 149 s and about 20 GB per plan.)
 - **OR-Tools** (`ortools.constraint_solver`) orders the stops.
-- Backend deps: `rustworkx`, `ortools`, plus `numpy` and `scipy` (KD-tree). Checked with rustworkx 0.18.1 and ortools 9.15.
+- Backend deps: `scipy` (Dijkstra, KD-tree), `numpy`, `ortools`. Checked with ortools 9.15.
 
 ### Profiles
 | Profile | Who | Hard limit (from the slope classes, configurable) |
@@ -310,17 +311,20 @@ A user picks a profile, a start, several destinations and optionally an end. The
 - **Edges:** **directed**, one per ordered pair of neighbours (8-neighbourhood), because uphill and downhill cost differently. A→B and B→A are separate edges with separate weights.
 - **One attribute set per profile on every edge:** `cost` (what routing minimises) plus the resources. Logical view per edge: `{"astronaut": {"cost": .., "o2_g": .., "water_g": ..}, "car": {...}}`; physically one array per `(profile, attribute)`, never a dict per edge. Compute all profiles with vectorised numpy over edge arrays, not one Python loop per edge.
 - **Impassable = `math.inf`.** If a profile can't use an edge, its `cost` (and resource attributes) are ∞. **Every edge has every attribute for every profile;** an edge is never left out for one profile, so all profiles share the same topology.
-- **`cost` and resources must be ≥ 0 and never NaN.** rustworkx rejects negative or NaN weights. A downhill bonus must still leave a weight ≥ 0.
+- **`cost` and resources must be ≥ 0 and never NaN.** A downhill bonus must still leave a weight ≥ 0. Infinite-cost (impassable) edges are left out of the CSR matrix, so the search never uses them.
 - **Inputs come only from the layer ingestion output (`GraphInputs`)**, never from `data/raw/` directly (`references/layer-ingestion.md`).
 - **Persist** to `data/graph/` (gitignored) as `graph.npz`:
-  - node arrays: `lon`, `lat`, `elev`, `valid`
+  - node arrays (each length `n_nodes`): `lon`, `lat`, `elev_m`, `valid` (required), plus `slope_deg`, `nearest_poi_dist_m`, and the per-season weather as 1-D arrays `weather_risk_0..3` and `weather_conf_0..3` (`SEASONS` order)
+  - `cost` is stored as float64 (the solver sums many of them); the resources as float32
   - edge arrays: `src`, `dst`, and for every profile `p` and attribute `a` an array named `p__a` (e.g. `astronaut__cost`, `astronaut__o2_g`, `car__energy_wh`)
-  - metadata: grid shape, resolution, DEM file hash, `formula_version`
+  - metadata (the "fingerprint"): format version, grid, `formula_version` (per profile), sha256 of every source file, build parameters (neighbourhood). A saved graph is stale when it no longer matches; `python -m app.graph` rebuilds only then (`--force` to override)
 - The loader rebuilds only when the metadata no longer matches. It is not rebuilt on every start.
 
 ### Step 2: startup: `app/graph/loader.py` (FastAPI lifespan)
-- Load `graph.npz` once and build the `PyDiGraph`: `g.add_nodes_from(range(n))`, then `g.add_edges_from(zip(src, dst, range(m)))`. The **edge payload is the edge id**.
-- Keep each profile's **`cost`** as a Python list indexed by edge id: `weights = {p: arrays[f"{p}__cost"].tolist() for p in profiles}`. Indexing a list from the Python `weight_fn` callback is much faster than indexing numpy. Keep the **resource** arrays as numpy (`attrs[p][a]`); they are only read for the edges of the final path.
+- Load `graph.npz` once and build the `RoutingGraph` (`RoutingGraph.from_graph_data`): `src`/`dst` int32, per-profile `cost` float64 and resource arrays indexed by **edge id**, a sorted `src * n + dst` key array for edge-id lookup, and (lazily, per profile) a SciPy CSR matrix of the finite-cost edges.
+- If `graph.npz` is missing the app fails at startup with a clear message to run `python -m app.graph` (it does not build silently).
+- The loader's output is the `RoutingGraph` (`app/routing/graph.py`, loaded by `app/graph/loader.load_routing_graph`): arrays, `shortest_paths`, `trace_path`, `edge_id(s)`, `path_cost`, `path_resources`, `coords`, and `snap(lon, lat)`. Routing codes against it.
+- Keep every array as NumPy: nothing is stored per edge as a Python object (no cost lists, no per-edge callbacks).
 - Keep the lookup structures in app state:
   - node index → (lon, lat) from the arrays
   - (lon, lat) → node index through a `scipy.spatial.cKDTree` built over the **valid** nodes only, in a local metric projection (scale lon by cos(lat))
@@ -346,22 +350,17 @@ Request:
   - `end` is present if and only if `end_mode = "fixed"`
   - **all snapped nodes are distinct** (start, destinations and end). Two clicks can snap to the same node; reject that and name the duplicates.
 
-### Step 4: cost matrix (rustworkx): `app/routing/matrix.py`
+### Step 4: cost matrix (SciPy Dijkstra): `app/routing/matrix.py`
 - Points: `P = [start, *destinations] (+ end if fixed)`, so N = 1 + len(destinations) (+1).
-- **One Dijkstra per point**, using only the chosen profile's weight:
-  ```python
-  w = weights[profile]
-  paths = rx.dijkstra_shortest_paths(g, P[i], weight_fn=lambda e: w[e])   # {target: [source, ..., target]}
-  ```
-  The leg weight is the sum of `w[g.get_edge_data(a, b)]` over the consecutive nodes of `paths[P[j]]`. Use this, or call `rx.dijkstra_shortest_path_lengths(g, P[i], lambda e: w[e])` for the lengths. Either way, one search per point.
+- **One Dijkstra per point**, using only the chosen profile's `cost`: `dist, pred = routing_graph.shortest_paths(profile, sources)` (SciPy `csgraph.dijkstra` on the profile's CSR matrix, in chunks of 8 sources to bound memory). `dist[k, target]` is the leg weight; `routing_graph.trace_path(pred[k], source, target)` recovers the node path from the predecessors. Either way, one search per point.
 - **Fill the matrix** `M[i][j]` (floats, unscaled) with the best path weight from `P[i]` to `P[j]`. **The diagonal is 0.** The graph is directed, so M is **not symmetric**.
 - **Unreachable pairs** (both cases verified):
-  - **The length is `inf`:** rustworkx still returns targets that can only be reached over ∞ edges, with length `inf`. Treat the pair as unreachable: the cell stays ∞, and **no leg path is saved**.
-  - **The target is missing from the result:** it isn't connected at all. Treat it the same way.
+  - **The distance is `inf`:** impassable edges are not in the search graph, so a target reachable only over them has distance `inf`. Treat the pair as unreachable: the cell stays ∞, and **no leg path is saved**.
+  - **The target is not connected at all:** its distance is also `inf`. Same treatment.
 - **Save each reachable leg's node path** as `legs[(i, j)]` for step 6.
 - **Output:** the N×N float matrix with ∞ meaning unreachable, plus `legs`.
 - The matrix holds shortest-path costs, so **reachability is transitive**. If start→A and A→B are finite, start→B is finite. Step 5 relies on this to explain drops.
-- **Performance:** `weight_fn` is a Python callback for each relaxed edge, so expect roughly 0.3–1 s per Dijkstra on ~2.6M edges. If that is too slow, run the N searches in a thread pool, or reduce the grid resolution.
+- **Performance (measured on the native 1,287,600-node / 10,287,166-edge graph with the real profiles, Apple silicon):** building the `RoutingGraph` from a loaded `GraphData` ~0.1 s, each profile's CSR matrix ~0.3 s, one Dijkstra ~0.4 s, a 3-stop plan ~2.3 s, the KD-tree for `snap` ~0.5 s once and ~0.1 ms per snap. Peak memory for the whole process (getters, graph build and routing) ~3.5 GB. The previous rustworkx engine took 149 s and ~20 GB for one plan on the same graph.
 
 ### Step 5: route solving (OR-Tools): `app/routing/solver.py`
 - **Prepare the matrix:**
@@ -393,7 +392,7 @@ Request:
 ### Step 6: route assembly: `app/routing/assemble.py`
 - **Join the saved leg paths** in the solved order into one continuous node path, dropping the duplicate node at each join (each leg starts where the previous one ended). Only legs between consecutive visited stops are used, and those are all finite, so every leg exists in `legs`. Skip the leg into the dummy open-end node.
 - **Total weight:** add up the legs using the **original unscaled** `M` values, never the scaled integers or the solver objective, which also includes penalties.
-- **Resources:** for each leg, sum `attrs[profile][a][edge_id]` over its edges (`edge_id = g.get_edge_data(u, v)`), for every attribute. Report per leg and in total, and compare the totals with the capacities in config; add a warning for each exceeded budget. Budgets are not enforced inside the search in the MVP (walk-back filtering is future work, see `references/edge-cost-model.md` section 7).
+- **Resources:** for each leg, sum `attrs[profile][a][edge_id]` over its edges (`routing_graph.edge_ids(nodes)`), for every attribute. Report per leg and in total, and compare the totals with the capacities in config; add a warning for each exceeded budget. Budgets are not enforced inside the search in the MVP (walk-back filtering is future work, see `references/edge-cost-model.md` section 7).
 - **Response:**
   ```json
   {
@@ -413,7 +412,7 @@ Request:
 ### Implementation (package G, done): `backend/app/routing/`
 | File | Entry point |
 |---|---|
-| `graph.py` | `RoutingGraph.from_graph_data(GraphData)`: the `PyDiGraph` (edge payload = edge id), per-profile `cost` lists, resource arrays, node lon/lat. Helpers `edge_id`, `path_cost`, `path_resources`, `coords(nodes) -> [[lon, lat], ...]`. Package F's loader calls `from_graph_data` at startup. |
+| `graph.py` | `RoutingGraph.from_graph_data(GraphData)`: NumPy arrays (`src`, `dst`, per-profile `cost` and resources, node lon/lat/valid) plus lazy per-profile CSR matrices. `shortest_paths`, `trace_path`, `edge_id`/`edge_ids`, `path_cost`, `path_resources`, `coords(nodes) -> [[lon, lat], ...]`, `snap`. `app/graph/loader.load_routing_graph` calls `from_graph_data` at startup. |
 | `matrix.py` | `build_cost_matrix(routing_graph, profile, point_nodes) -> CostMatrix` (step 4) |
 | `solver.py` | `solve(cost_matrix, end_mode, time_limit_s) -> SolverResult` (step 5); `NoFeasibleRoute` when no route exists at all (unreachable fixed end) |
 | `assemble.py` | `assemble(routing_graph, query, cost_matrix, solution, capacities=None, reserve_margin=0.0) -> RoutePlan` (step 6); budget warnings only when capacities are passed |

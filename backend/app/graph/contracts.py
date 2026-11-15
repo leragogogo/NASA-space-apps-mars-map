@@ -1,5 +1,5 @@
 """GraphData: the master graph as plain arrays (struct-of-arrays), the contract between the
-graph builder (writes it), the loader (reads it, builds the rustworkx graph) and routing.
+graph builder (writes it), the loader (reads it, builds the NumPy/SciPy routing graph) and routing.
 
 Logical view of one edge (see edge_attrs):
     {"astronaut": {"cost": .., "o2_g": .., ...}, "car": {...}}
@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Mapping
+from typing import Any, Mapping
 
 import numpy as np
 
@@ -19,8 +19,17 @@ from app.core.resources import EDGE_ATTRS, PROFILES, ProfileId, attr_key
 from app.layers.contracts import GridSpec
 
 NODE_REQUIRED = ("lon", "lat", "elev_m", "valid")
+FORMAT_VERSION = 1  # bump when the on-disk layout changes
 _META_KEY = "__meta__"
 _NODE_PREFIX = "node__"
+
+
+def make_fingerprint(grid: GridSpec, formula_version: str, source_hashes: Mapping[str, str],
+                     build_params: Mapping[str, Any]) -> dict[str, Any]:
+    """What a saved graph was built from. A graph is stale when this no longer matches."""
+    return json.loads(json.dumps({"format_version": FORMAT_VERSION, "grid": grid.to_dict(),
+                                  "formula_version": formula_version,
+                                  "source_hashes": dict(source_hashes), "build_params": dict(build_params)}))
 
 
 @dataclass(frozen=True, eq=False)
@@ -31,7 +40,11 @@ class GraphData:
     dst: np.ndarray
     edge_arrays: Mapping[str, np.ndarray]  # "<profile>__<attr>" -> float array length m
     formula_version: str
-    source_hashes: Mapping[str, str] = field(default_factory=dict)
+    source_hashes: Mapping[str, str] = field(default_factory=dict)  # source file -> sha256
+    build_params: Mapping[str, Any] = field(default_factory=dict)  # e.g. {"neighbours": 8}
+
+    def fingerprint(self) -> dict[str, Any]:
+        return make_fingerprint(self.grid, self.formula_version, self.source_hashes, self.build_params)
 
     @property
     def n_edges(self) -> int:
@@ -81,23 +94,31 @@ class GraphData:
 
     def save(self, path: str | Path) -> None:
         self.validate()
-        meta = {"grid": self.grid.to_dict(), "formula_version": self.formula_version,
-                "source_hashes": dict(self.source_hashes)}
+        meta = self.fingerprint()
         arrays = {f"{_NODE_PREFIX}{k}": v for k, v in self.node.items()}
         arrays.update(src=self.src, dst=self.dst, **self.edge_arrays)
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         np.savez_compressed(path, **arrays, **{_META_KEY: np.array(json.dumps(meta))})
 
+    @staticmethod
+    def read_meta(path: str | Path) -> dict[str, Any]:
+        """The fingerprint stored in a saved graph, without loading the arrays."""
+        with np.load(path, allow_pickle=False) as z:
+            return json.loads(str(z[_META_KEY]))
+
     @classmethod
     def load(cls, path: str | Path) -> "GraphData":
         with np.load(path, allow_pickle=False) as z:
             meta = json.loads(str(z[_META_KEY]))
+            if meta.get("format_version") != FORMAT_VERSION:
+                raise ValueError(f"unsupported graph format {meta.get('format_version')!r}; "
+                                 f"rebuild it with `python -m app.graph --force`")
             node = {k[len(_NODE_PREFIX):]: z[k] for k in z.files if k.startswith(_NODE_PREFIX)}
             edge_keys = {attr_key(p, a) for p in PROFILES for a in EDGE_ATTRS}
             edge_arrays = {k: z[k] for k in z.files if k in edge_keys}
             data = cls(grid=GridSpec.from_dict(meta["grid"]), node=node, src=z["src"], dst=z["dst"],
                        edge_arrays=edge_arrays, formula_version=meta["formula_version"],
-                       source_hashes=meta.get("source_hashes", {}))
+                       source_hashes=meta.get("source_hashes", {}), build_params=meta.get("build_params", {}))
         data.validate()
         return data
