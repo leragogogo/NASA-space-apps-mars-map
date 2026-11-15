@@ -2,7 +2,9 @@ import pytest
 
 from app.core.config import Settings
 from app.layers.base import LayerUnavailable
-from app.layers.weather.getter import SEASONS, WeatherGetter, display_risk, display_style
+from app.layers.relief.ingest import grid_for
+from app.layers.weather.ingest import display_risk, ingest_weather
+from app.layers.weather.service import SEASONS, WeatherGetter, display_style
 
 
 def test_display_risk_is_null_safe():
@@ -21,7 +23,7 @@ def test_display_style():
 
 @pytest.fixture(scope="module")
 def weather(fixture_settings):
-    return WeatherGetter(fixture_settings)
+    return WeatherGetter(fixture_settings, ingest_weather(fixture_settings, grid_for(fixture_settings)))
 
 
 def test_seasons():
@@ -42,6 +44,12 @@ def test_describe_winter(weather):
     assert by_lon[-71.0]["message"].startswith("APPROXIMATE:")  # verbatim
 
 
+def test_cell_polygons_are_closed_one_degree_squares(weather):
+    ring = weather.cells("winter")[0]["geometry"]["coordinates"][0]
+    assert ring[0] == ring[-1] and len(ring) == 5
+    assert ring[2][0] - ring[0][0] == pytest.approx(1.0) and ring[2][1] - ring[0][1] == pytest.approx(1.0)
+
+
 def test_cells_per_season(weather):
     assert all(len(weather.cells(k)) == 3 for k in SEASONS)
 
@@ -53,7 +61,8 @@ def test_sample_all_seasons(weather):
     assert weather.sample(0.0, 0.0) is None
 
 
-def test_missing_files(tmp_path):
+def test_missing_aoi_summary_file(fixture_settings, tmp_path):
+    data = ingest_weather(fixture_settings, grid_for(fixture_settings))
     with pytest.raises(LayerUnavailable) as ex:
-        WeatherGetter(Settings(data_dir=tmp_path))
+        WeatherGetter(Settings(data_dir=tmp_path), data)
     assert ex.value.fix == "python scripts/download_data.py --only weather"

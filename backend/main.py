@@ -1,28 +1,44 @@
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api.routes import auth, layers, tiles, users
+from app.api.routes import auth, layers, route, tiles, users
 from app.core.config import Settings
+from app.core.configfile import load_settings
 from app.db.session import init_db, make_engine
+from app.graph.loader import load_routing_context, staleness_warnings
+from app.graph.startup import start_background_build
 from app.layers.base import LayerUnavailable
 from app.layers.registry import build_registry
 
+log = logging.getLogger(__name__)
+
 
 def create_app(settings: Settings | None = None) -> FastAPI:
-    settings = settings or Settings()
+    settings = settings or load_settings()  # config/mars.yaml (or $MARS_CONFIG)
     if not settings.jwt_secret_key:
         raise RuntimeError("JWT_SECRET_KEY is not set: copy backend/.env.example to backend/.env (see README)")
+    if settings.unconfirmed:
+        log.warning("Configuration sections not yet confirmed by the product owner (placeholder values): %s",
+                    ", ".join(settings.unconfirmed))
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         app.state.layers = build_registry(settings)  # loads every layer once
         engine = make_engine(settings.database_url)
         app.state.session_factory = init_db(engine)
-        # TODO: also load the routing graph here (app.graph.lifespan.routing_graph_lifespan) once the route
-        # endpoint lands. Run `python -m app.graph` first: the app refuses to start without graph.npz.
+        if settings.build_graph_on_startup:
+            start_background_build(app, settings)  # builds the graph if missing or stale; /api/route is 503 until ready
+        else:
+            try:
+                app.state.routing = load_routing_context(settings)  # graph + KD-tree, once
+                for warning in staleness_warnings(app.state.routing, settings):
+                    log.warning(warning)
+            except LayerUnavailable as ex:
+                app.state.routing = ex  # /api/route answers 503; layer endpoints keep working
         yield
         engine.dispose()
 
@@ -44,6 +60,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"message": "Hello from FastAPI"}
 
     app.include_router(layers.router)
+    app.include_router(route.router)
     app.include_router(tiles.router)
     app.include_router(auth.router)
     app.include_router(users.router)
@@ -51,3 +68,4 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
 
 app = create_app()
+

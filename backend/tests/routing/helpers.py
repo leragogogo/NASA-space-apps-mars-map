@@ -17,6 +17,10 @@ def resource_factor(resource: str) -> float:
 
 
 def make_graph(n_nodes: int, edges, car_edges=None) -> RoutingGraph:
+    return RoutingGraph.from_graph_data(make_graph_data(n_nodes, edges, car_edges))
+
+
+def make_graph_data(n_nodes: int, edges, car_edges=None) -> GraphData:
     """n_nodes in one grid row; edges: (from_node, to_node, cost).
 
     car_edges: {(from_node, to_node): car cost}; by default the car cost equals the astronaut cost.
@@ -37,7 +41,7 @@ def make_graph(n_nodes: int, edges, car_edges=None) -> RoutingGraph:
     data = GraphData(grid=grid, node=node, src=src, dst=dst, edge_arrays=edge_arrays,
                      formula_version="test")
     data.validate()
-    return RoutingGraph.from_graph_data(data)
+    return data
 
 
 def both(from_node: int, to_node: int, cost: float, back: float | None = None):

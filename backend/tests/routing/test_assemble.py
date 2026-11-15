@@ -70,3 +70,19 @@ def test_budget_warnings_respect_the_reserve_margin():
     assert "o2_g" in warning and "80.0 g" in warning
     route = plan(0, (4,), order=(0,), capacities={"time_s": 1.0})
     assert len(route.warnings) == 1 and "time_s" in route.warnings[0]
+
+
+def test_a_custom_path_resources_function_replaces_the_graph_sums_and_feeds_the_budget_warnings():
+    seen = []
+
+    def doubled(profile, nodes):
+        seen.append((str(profile), tuple(nodes)))
+        return {r: 2.0 * LINE_GRAPH.path_resources(profile, nodes)[r] for r in RESOURCES}
+
+    default = plan(1, (3,), order=(0,))
+    custom = plan(1, (3,), order=(0,), path_resources=doubled, capacities={"o2_g": 1.0})
+    assert len(seen) == len(custom.legs) and all(p == "astronaut" for p, _ in seen)
+    for r in RESOURCES:
+        assert custom.resources[r] == pytest.approx(2.0 * default.resources[r])
+    assert custom.total_cost == default.total_cost  # the route itself is unchanged
+    assert any("o2_g" in w for w in custom.warnings)  # the budget check uses the replaced numbers

@@ -1,8 +1,9 @@
 """Parameters of the two profile models.
 
 Every number here is a PLACEHOLDER, not a real suit or rover specification (edge-cost-model.md sections 5-6).
-They are plain defaults until the config module exists ("we will worry about the config later on"); then
-they move under `app/core/config` as `profiles.<profile>.*` without changing the formulas.
+These are the built-in fallbacks. The values actually used come from `config/mars.yaml` (`profiles.<profile>`),
+loaded by `app.core.configfile.load_settings` and turned into models by `models_from_settings`; a parameter the
+file does not list keeps the default below.
 """
 from __future__ import annotations
 
@@ -30,8 +31,9 @@ def _check_weights(alpha: float, beta: float, p: float, limit_deg: float) -> Non
 
 @dataclass(frozen=True)
 class AstronautParams:
-    # TODO(product owner): confirm the slope limit; 15 deg is a proposal, not a requirement.
-    hard_limit_deg: float = 15.0
+    # TODO(product owner): confirm the slope limit. 20 deg is the Artemis suit's stated capability (lunar; NASA
+    # Exploration EVA Testing and Analogs, 2021). Keep it below ~24 deg: the Minetti model is valid to gradient 0.45.
+    hard_limit_deg: float = 20.0
     # TODO(product owner): confirm the cost weights alpha (time) and beta (energy) and the exponent p.
     alpha: float = 0.5
     beta: float = 0.5
@@ -70,8 +72,9 @@ class AstronautParams:
 
 @dataclass(frozen=True)
 class CarParams:
-    # TODO(product owner): confirm the slope limit; 35 deg is a proposal, not a requirement.
-    hard_limit_deg: float = 35.0
+    # TODO(product owner): confirm the slope limit. 25 deg is the Apollo rover's design maximum (lunar; LPSC 2026
+    # abstract); a pressurized rover may need less.
+    hard_limit_deg: float = 25.0
     # TODO(product owner): confirm the cost weights and the exponent p.
     alpha: float = 0.5
     beta: float = 0.5

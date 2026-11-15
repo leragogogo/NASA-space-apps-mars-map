@@ -39,6 +39,7 @@ class TileSource(BaseModel):
     max_zoom: int
     bounds: list[list[float]]
     coverage_note: str
+    role: str | None = None  # base imagery only: primary | fallback | zoom-in detail
 
 
 class LayerOneResponse(BaseModel):

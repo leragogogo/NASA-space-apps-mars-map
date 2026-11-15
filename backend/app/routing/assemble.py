@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Mapping
+from typing import Callable, Mapping, Sequence
 
 from app.core.resources import RESOURCES, UNITS
 from app.routing.contracts import (
@@ -48,8 +48,14 @@ def assemble(
     solution: SolverResult,
     capacities: Mapping[str, float] | None = None,
     reserve_margin: float = 0.0,
+    path_resources: Callable[[object, Sequence[int]], Mapping[str, float]] | None = None,
 ) -> RoutePlan:
-    """Budgets are only checked, not enforced (capacities: resource name -> capacity)."""
+    """Budgets are only checked, not enforced (capacities: resource name -> capacity).
+
+    `path_resources(profile, nodes)` replaces the graph's own resource sums, e.g. to use the requesting
+    user's body mass; by default the precomputed per-edge arrays are summed.
+    """
+    resources_of = path_resources or routing_graph.path_resources
     points = stop_points(query, solution)
     legs: list[Leg] = []
     path = [cost_matrix.nodes[0]]
@@ -67,7 +73,7 @@ def assemble(
                 to_point=to_point,
                 nodes=nodes,
                 cost=float(cost_matrix.matrix[from_point, to_point]),
-                resources=routing_graph.path_resources(query.profile, nodes),
+                resources=dict(resources_of(query.profile, nodes)),
             )
         )
         path.extend(nodes[1:])  # each leg starts where the previous one ended

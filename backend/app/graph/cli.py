@@ -2,7 +2,7 @@
 
     python -m app.graph --fake            build from synthetic layers + stub profiles (dev/demo)
     python -m app.graph --fake --small    ... on a tiny grid (fast)
-    python -m app.graph                   the layer getters' data (data/raw/) + the real profile models
+    python -m app.graph                   the ingested layers (data/raw/, app.layers.inputs.load_all) + the real profile models
 """
 from __future__ import annotations
 
@@ -14,12 +14,11 @@ from pathlib import Path
 from app.graph.build import BuildConfig
 from app.graph.fakes import stub_models
 from app.graph.store import DEFAULT_GRAPH_PATH, ensure_graph
+from app.core.configfile import ConfigError, load_settings
 from app.layers.contracts import GraphInputs, LayerDataError, default_grid
 from app.layers.fakes import fake_grid, fake_poi, fake_relief, fake_weather
-from app.core.config import Settings
-from app.graph.getters import graph_inputs_from_registry
-from app.layers.registry import build_registry
-from app.routing.profiles import default_models
+from app.layers.inputs.load import load_all
+from app.routing.profiles import models_from_settings
 
 FAKE_GRAPH_PATH = DEFAULT_GRAPH_PATH.with_name("graph_fake.npz")
 
@@ -31,7 +30,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--small", action="store_true", help="with --fake: use a tiny grid")
     ap.add_argument("--out", type=Path, default=None, help=f"default {DEFAULT_GRAPH_PATH} (fake: {FAKE_GRAPH_PATH})")
     ap.add_argument("--data-dir", type=Path, default=None, help="data folder holding raw/ (default: the repo's data/)")
-    ap.add_argument("--coarsen", type=int, default=1, help="average the getter's 200 m grid by this factor (default 1 = native)")
+    ap.add_argument("--config", type=Path, default=None,
+                    help="configuration file (default: $MARS_CONFIG, else config/mars.yaml)")
+    ap.add_argument("--coarsen", type=int, default=None,
+                    help="average the 200 m DEM by this factor (default: Settings.grid_coarsen, 1 = native 200 m)")
     ap.add_argument("--force", action="store_true", help="rebuild even if the saved graph is fresh")
     ap.add_argument("--neighbours", type=int, choices=(4, 8), default=8)
     args = ap.parse_args(argv)
@@ -44,14 +46,19 @@ def main(argv: list[str] | None = None) -> int:
         models = stub_models()
         out = args.out or FAKE_GRAPH_PATH
     else:
+        overrides = {k: v for k, v in (("data_dir", args.data_dir), ("grid_coarsen", args.coarsen)) if v is not None}
         try:
-            settings = Settings(data_dir=args.data_dir) if args.data_dir else Settings()
-            inputs = graph_inputs_from_registry(build_registry(settings), settings, args.coarsen)
+            settings = load_settings(args.config, **overrides)
+        except ConfigError as ex:
+            print(f"invalid configuration: {ex}", file=sys.stderr)
+            return 2
+        try:
+            inputs = load_all(settings)
         except LayerDataError as ex:
             print(f"cannot build the graph: {ex}", file=sys.stderr)
             return 2
-        models = default_models()
-        out = args.out or DEFAULT_GRAPH_PATH
+        models = models_from_settings(settings)  # the parameters of the configuration file
+        out = args.out or settings.graph_file  # the file the app loads at startup
     t0 = time.time()
     data, built = ensure_graph(out, inputs, models, BuildConfig(neighbours=args.neighbours), force=args.force)
     verb = "built" if built else "up to date (loaded)"

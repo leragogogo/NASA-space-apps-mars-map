@@ -19,7 +19,7 @@ def test_slope_classes_are_contiguous():
     assert SLOPE_CLASSES[0].min_deg == 0
     for a, b in zip(SLOPE_CLASSES, SLOPE_CLASSES[1:]):
         assert a.max_deg == b.min_deg
-    assert [c.id for c in SLOPE_CLASSES] == ["easy_walk", "walkable", "vehicle_only", "vehicle_limit", "impassable"]
+    assert [c.id for c in SLOPE_CLASSES] == ["easy_walk", "walkable", "walkable_caution", "vehicle_only", "impassable"]
 
 
 def test_tile_sources_cover_three_layers():

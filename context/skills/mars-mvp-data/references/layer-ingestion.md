@@ -47,7 +47,7 @@ The one grid every layer is resampled to and the graph is built on.
 
 Helpers: `node_id(row, col) = row * ncols + col` and its inverse, `lonlat_center(row, col)`, `lonlat_to_rc(lon, lat)`, `contains(lon, lat)`, `metric_spacing()` (dx, dy in m at each row).
 
-Default grid: the relief getter's own 200 m grid (1200 x 1073, 1,287,600 nodes). A coarser grid is an option (`graph_inputs_from_registry(..., coarsen=N)`, `python -m app.graph --coarsen N`). Nodes sit at cell centres.
+Default grid: the 200 m DEM (1200 x 1073) at its native resolution (1,287,600 nodes). Configurable with `Settings.grid_coarsen` (2 -> about 400 m, ~320k nodes; `python -m app.graph --coarsen N`); `app/layers/relief/ingest.py: grid_for(settings)` builds it from the DEM shape (falls back to the known shape when the DEM is missing). The same grid serves the display overlay and the graph, so the slope shown and the slope routed are one array. Nodes sit at cell centres.
 
 ## 4. Per-layer contract
 
@@ -56,17 +56,17 @@ Default grid: the relief getter's own 200 m grid (1200 x 1073, 1,287,600 nodes).
 - `ReliefData`: `grid`, `elev_m` float32 (NaN = nodata), `valid` bool, `slope_deg` float32 (node slope), optional `roughness_m` float32 (std-dev of elevation in a 3x3 window).
 - Resample to the grid with a NaN-aware block mean. Compute `slope_deg` **once**, from the resampled `elev_m` with central differences using the metric spacing. The graph builder derives signed edge gradients from the same `elev_m`. Display slope and routing slope therefore share one source.
 - Caveat: at 200-400 m the slope underestimates local steepness.
-- Service: slope-class overlay PNG + bounds (classes from config: 0-5 easy walk, 5-15 walkable, 15-25 vehicle only, 25-35 hard, >35 impassable), elevation at a point, hillshade tiles (served like imagery).
+- Service: slope-class overlay PNG + bounds (classes from `config/mars.yaml`: 0-5 easy walk, 5-15 walkable, 15-20 walkable with caution, 20-25 vehicle only, >25 impassable), elevation at a point, hillshade tiles (served like imagery).
 
 ### Points of interest (`app/layers/poi/`)
 - Reads: `data/raw/features/*.geojson` (see SKILL.md section 5, Layer 3).
-- `PoiData.features: list[PoiFeature]`. `PoiFeature`: `id` (stable, `<service>:<layer_id>:<objectid-or-index>`), `kind` (enum: `rsl`, `mineral_sulfate`, `mineral_silica`, `mineral_hydrous`, `dune_field`, `exploration_zone`, `exploration_roi`, `crism_site`, `nomenclature`, `geology_unit`), `name` (optional), `geometry` (GeoJSON Point or Polygon, lon -180..180), `source` (`service/layer`), `properties` (raw attributes, trimmed).
+- `PoiData.features: list[PoiFeature]`. `PoiFeature`: `id` (stable, `<service>:<layer_id>:<objectid-or-index>`, e.g. `EZMars:3:0`), `kind` (enum: `rsl`, `mineral_sulfate`, `mineral_silica`, `mineral_hydrous`, `dune_field`, `exploration_zone`, `exploration_roi`, `crism_site`, `nomenclature`, `geology_unit`), `name` (optional), `geometry` (GeoJSON Point or Polygon, lon -180..180), `source` (`service/layer`), `properties` (raw attributes, trimmed).
 - Optional node attributes for the graph: `nearest_poi_dist_m` float32, `nearest_poi_id` int32 (index into `features`, -1 = none). Not required by routing in the MVP (destinations are user clicks).
-- Service: GeoJSON FeatureCollection, filter by `kind`.
+- Service: GeoJSON FeatureCollection with `kind` and `category` per feature; the API filters by `category` (mineral, water_activity, exploration_zone, dunes, geology, place_name, observation).
 - Shelter candidates (pits/depressions from the DEM) are not implemented; reserve `kind = "shelter_candidate"`.
 
 ### Weather (`app/layers/weather/`)
-- Reads: `data/raw/weather/context_weather_frames.geojson` (1 deg cells x 4 seasons, 6,400 frames), produced by `python scripts/download_data.py` (the `weather` step, code in `scripts/weather/`, computed from the raw MDAD file with the logic of skill scripts 06 -> 07). Optional keys of a frame (`typical_year_rate`, `typical_year_risk`, `extreme_year`, `neighbour_estimate`) are **absent, not null**, when they do not apply; `message`, `confidence`, `season` are always present. Develop against `fake_weather` until the ingestion exists.
+- Reads: `data/raw/weather/context_weather_frames.geojson` (1 deg cells x 4 seasons, 6,400 frames), produced by `python scripts/download_data.py` (the `weather` step, code in `scripts/weather/`, computed from the raw MDAD file with the logic of skill scripts 06 -> 07). Optional keys of a frame (`typical_year_rate`, `typical_year_risk`, `extreme_year`, `neighbour_estimate`) are **absent, not null**, when they do not apply; `message`, `confidence`, `season` are always present. The service also reads `aoi_weather_frames.json` (AOI summary card). Cells outside the routing grid stay in `frames` (the layer endpoint serves them) but get no grid cells.
 - `WeatherData`: `seasons` (the four exact strings, fixed order: `S. Autumn (Ls 0-90)`, `S. Winter (Ls 90-180)`, `S. Spring (Ls 180-270, perihelion)`, `S. Summer (Ls 270-360)`), `risk` int8 `(4, nrows, ncols)` (0 Low, 1 Moderate, 2 High, -1 no estimate), `confidence` int8 `(4, nrows, ncols)` (0 reliable, 1 approximate, 2 insufficient_data), `frame_idx` int32 `(nrows, ncols)` into `frames`, `frames` (one record per 1 deg cell with the full per-season frame fields from SKILL.md section 6, including `message`), `caveat` (the global caveat string).
 - `risk` is the **display risk**: `typical_year_risk`, else `risk`, else `neighbour_estimate.risk`, else -1.
 - `frame_at(lon, lat, season) -> WeatherFrame` for warnings.
@@ -81,27 +81,27 @@ Default grid: the relief getter's own 200 m grid (1200 x 1073, 1,287,600 nodes).
 ## 5. What the graph builder receives
 
 ```python
-class GraphInputs:        # produced by app.graph.getters.graph_inputs_from_registry
+class GraphInputs:        # produced by app.layers.inputs.load.load_all(settings)
     grid: GridSpec
     relief: ReliefData
     weather: WeatherData
     poi: PoiData
 ```
 
-`app/graph/build.py` imports only `GridSpec`, `GraphInputs` and the profile functions. It never opens a file under `data/raw/`.
+`app/graph/build.py` imports only `GridSpec`, `GraphInputs` and the profile functions. It never opens a file under `data/raw/`. `load_all(settings, grid=None)` lives in `app/layers/inputs/load.py`; it runs the three ingests on one grid, validates and raises `LayerDataError` when data is missing. The API's `registry.py` runs ingest -> service per layer at startup and turns a `LayerDataError` into HTTP 503 with a `fix`.
 
-## 6. Proposed API endpoints (frontend and backend agree on these)
+## 6. API endpoints (as implemented; frontend and backend agree on these)
 
 | Endpoint | Returns |
 |---|---|
-| `GET /api/layers` | catalog: layers, tile sizes, zoom ranges, bounds, season names |
-| `GET /api/layers/imagery/{layer_id}/{z}/{row}/{col}` | tile image |
-| `GET /api/layers/relief/hillshade/{z}/{row}/{col}` | tile image |
-| `GET /api/layers/relief/slope-overlay` | PNG + `bounds` (or JSON with a data URL) |
-| `GET /api/layers/relief/elevation?lon=&lat=` | `{elev_m, slope_deg}` |
-| `GET /api/layers/poi?kind=` | GeoJSON |
-| `GET /api/layers/weather?season=` | GeoJSON + `caveat` |
-| `POST /api/route` | SKILL.md section 10 |
+| `GET /api/get-layer-one` | base imagery catalog: sources, tile URLs, tile sizes, zoom ranges, bounds, role |
+| `GET /api/get-layer-two` | relief catalog: slope classes, overlay URL + bounds, hillshade sources, caveats |
+| `GET /api/get-layer-two/walkability.png` | slope-class overlay PNG (one pixel per grid cell) |
+| `GET /api/get-layer-two/point?lon=&lat=` | `{elevation_m, slope_deg, slope_class, walkable, vehicle, approximate}` |
+| `GET /api/get-layer-three?category=` | POI GeoJSON (comma-separated categories) |
+| `GET /api/get-layer-four?season=` | weather GeoJSON + `caveat`; `season` = `autumn` \| `winter` \| `spring` \| `summer` |
+| `GET /api/tiles/{source}/{z}/{row}/{col}` | tile image; `source` = `ctx_coprates`, `ctx_global`, `hirise`, `hillshade_color`, `hillshade_ctx`, `crism_sulfate` |
+| `POST /api/route` | SKILL.md section 10 (`season` uses the same short keys) |
 
 All coordinates in responses are lon/lat (-180..180). Pydantic models in `app/schemas/`.
 
@@ -130,9 +130,11 @@ Every ingestion module's definition of done: its real `ingest` passes `validate_
 | C. weather ingest + service | 0 | `data/raw/weather/` (written by `download_data.py --only weather`) or `fake_weather`. `weather/getter.py` is what the graph and the API read |
 | D. imagery catalog + tile service | 0 | real tiles |
 | E. profile cost/resource functions (`compute_edge_attrs`) | **done** (`app/routing/profiles/`: Tobler + Minetti astronaut, traction car; every parameter is a placeholder, see `edge-cost-model.md`) | pure arrays, no layers |
-| F. graph builder, saver, loader | 0, E | `fake_inputs`, stub profiles (`app/graph/fakes.py`). **Done and tested:** `edges`, `geometry`, `attrs`, `nodes`, `build`, `store`, `loader` (`RoutingGraph`), `lifespan`, `python -m app.graph --fake`. `python -m app.graph` builds the real graph from the layer getters (`app/graph/getters/`) with the real profile models (about 10 s, 321,600 nodes, 2.57 M edges) |
+| F. graph builder, saver, loader | 0, E | `fake_inputs`, stub profiles (`app/graph/fakes.py`). **Done and tested:** `edges`, `geometry`, `attrs`, `nodes`, `build`, `store`, `loader` (`RoutingContext`, loaded by the API at startup), `python -m app.graph --fake`. `python -m app.graph` builds the real graph from `load_all` with the real profile models (native 200 m grid: 1,287,600 nodes, 10,287,166 edges, about 40 s) |
 | G. routing matrix, solver, assembly | **done** (`app/routing/`, SKILL.md section 10) | tiny hand-built graphs |
 | H. API routers + schemas | 0 | fakes |
 | I. frontend | endpoint table above | mocked JSON |
 
-`app.graph.getters.graph_inputs_from_registry(registry, settings, coarsen=1)` is the integration point: it builds `GraphInputs` from the relief, weather and POI getters through their public methods (`grid()`, `cells()`/`describe()`, `features()`) and runs `validate_inputs`. The graph therefore sees what the map shows; relief is the getter's own 200 m elevation and slope arrays, unchanged at the default `coarsen=1` (so the routed slope is exactly the displayed slope). The graph has 1.29 M nodes and 10.3 M edges and routes in seconds because the routing engine keeps everything in NumPy arrays and runs SciPy's Dijkstra. The `service.py` split and the imagery catalog are out of scope.
+Packages A-D are done: each layer has `ingest.py` (contract output) and `service.py` (client format, class `...Getter`). The relief `slope_deg` is computed once on the grid and shared by the overlay and the graph. Not implemented: optional `roughness_m` and `nearest_poi_*` arrays.
+
+`app.layers.inputs.load.load_all(settings)` is the integration point for the graph: it runs the three ingests on the shared grid and `validate_inputs`. At the native 200 m grid the graph has 1.29 M nodes and 10.3 M edges and plans routes in seconds, because the routing engine keeps everything in NumPy arrays and runs SciPy's Dijkstra (`app/routing/graph.py`). The ingestion `source_files` entries (`path:sha256`) are what the graph fingerprint hashes, so a changed source file marks a saved graph stale.

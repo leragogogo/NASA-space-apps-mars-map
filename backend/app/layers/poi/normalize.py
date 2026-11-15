@@ -86,6 +86,36 @@ DATASETS = {
 }
 CLIP_TO_AOI = {"SIM3292_Global_Geology__0"}
 
+# file stem -> PoiKind value (layer-ingestion.md section 4); aqueous minerals are refined by their class
+KIND_BY_STEM = {
+    "Aquieous_Mineral_Distribution_Options_clon0__0": "mineral_hydrous",
+    "Hydrous_Mineral_Detections_OMEGA_CRISM_clon0__0": "mineral_hydrous",
+    "RSLs_Gullies_New_IcyCraters_clon0__0": "rsl",
+    "EZMars__0": "exploration_zone",
+    "EZMars__3": "exploration_roi",
+    "EZMars__4": "exploration_zone",
+    "Dune_Field__0": "dune_field",
+    "SIM3292_Global_Geology__0": "geology_unit",
+    "combinedNom__0": "nomenclature",
+    "mars_mro_crism_mtrdr_c0a_humex_frt_sites__0": "crism_site",
+}
+
+
+def kind_of(stem: str, props: dict) -> str:
+    if stem.startswith("Aquieous_Mineral"):
+        cls = _s(props.get("Class")).lower()
+        if "sulfate" in cls:
+            return "mineral_sulfate"
+        if "silica" in cls:
+            return "mineral_silica"
+    return KIND_BY_STEM[stem]
+
+
+def poi_id(stem: str, index: int, props: dict) -> str:
+    """Stable id `<service>:<layer_id>:<objectid-or-index>`, from a file stem `<service>__<layer_id>`."""
+    service, _, layer_id = stem.rpartition("__")
+    return f"{service}:{layer_id}:{props.get('FID', index)}"
+
 
 def normalize_lon(coords):
     """Recursively convert 0..360 east longitudes to -180..180."""

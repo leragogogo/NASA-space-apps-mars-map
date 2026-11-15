@@ -47,7 +47,7 @@ def test_slope_class_shares(real):
     _, reg = real
     cls = reg.get("relief").grid()["slope_class"]
     shares = [100 * float(np.mean(cls == k)) for k in range(5)]
-    assert shares == pytest.approx([52.8, 32.7, 10.7, 3.5, 0.4], abs=0.1)
+    assert shares == pytest.approx([52.8, 32.7, 6.1, 4.6, 3.9], abs=0.15)  # 0-5, 5-15, 15-20, 20-25, >25 degrees
 
 
 def test_point_matches_grid(real):

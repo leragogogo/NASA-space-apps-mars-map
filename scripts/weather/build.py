@@ -1,6 +1,9 @@
 """Build the static weather layer from the raw MDAD file.
 
-  python scripts/weather/build.py            (from the repo root; also run by download_data.py)
+  python scripts/weather/build.py [--config config/mars.yaml]   (from the repo root; also run by download_data.py)
+
+The dust-storm risk thresholds come from the `weather.risk_bins` section of config/mars.yaml and are recorded
+in both JSON outputs (`risk_bins`), so the API can tell when the files were computed with other thresholds.
 
 Reads  data/raw/mdad/MDAD_original
 Writes data/raw/weather/
@@ -43,11 +46,23 @@ def _feature(frame: dict, cell: float) -> dict:
     return {"type": "Feature", "geometry": {"type": "Polygon", "coordinates": [ring]}, "properties": props}
 
 
-def build_weather_layer(src: Path = DEFAULT_SRC, out_dir: Path = DEFAULT_OUT) -> dict:
-    """Run the pipeline; returns a summary {files, frames, confidence counts per season}."""
+def build_weather_layer(src: Path = DEFAULT_SRC, out_dir: Path = DEFAULT_OUT, risk_bins: dict | None = None) -> dict:
+    """Run the pipeline; returns a summary {files, frames, risk_bins, confidence counts per season}.
+
+    `risk_bins` ({"moderate_from", "high_from"} in storm-days per Mars year) defaults to config/mars.yaml.
+    """
     src, out_dir = Path(src), Path(out_dir)
     if not src.is_file():
         raise FileNotFoundError(f"{src} not found; run `python scripts/download_data.py --only mdad` first")
+    bins = cfg.check_risk_bins(risk_bins if risk_bins is not None else cfg.risk_bins_from_config())
+    previous = cfg.set_risk_bins(bins)
+    try:
+        return _build(src, out_dir, bins)
+    finally:
+        cfg.RISK_BINS = previous  # the thresholds are only in force while this build runs
+
+
+def _build(src: Path, out_dir: Path, bins: dict) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     d = load_mdad(src)
@@ -64,18 +79,18 @@ def build_weather_layer(src: Path = DEFAULT_SRC, out_dir: Path = DEFAULT_OUT) ->
         f["message"] = message(f, name, "East Melas")
         aoi.append(f)
     (out_dir / "aoi_weather_frames.json").write_text(json.dumps(
-        {"aoi": cfg.AOI, "caveat": cfg.GLOBAL_CAVEAT, "frames": aoi}, indent=1, default=_json_default))
+        {"aoi": cfg.AOI, "caveat": cfg.GLOBAL_CAVEAT, "risk_bins": bins, "frames": aoi}, indent=1, default=_json_default))
 
     frames = grid_frames(d, gaps, cfg.CONTEXT, cfg.CELL)
     (out_dir / "context_weather_frames.geojson").write_text(json.dumps(
-        {"type": "FeatureCollection", "caveat": cfg.GLOBAL_CAVEAT,
+        {"type": "FeatureCollection", "caveat": cfg.GLOBAL_CAVEAT, "risk_bins": bins,
          "features": [_feature(f, cfg.CELL) for f in frames]}, default=_json_default))
 
     counts: dict[str, dict[str, int]] = {}
     for f in frames:
         c = counts.setdefault(f["season"], {})
         c[f["confidence"]] = c.get(f["confidence"], 0) + 1
-    return {"files": sorted(p.name for p in out_dir.iterdir()), "frames": len(frames),
+    return {"files": sorted(p.name for p in out_dir.iterdir()), "frames": len(frames), "risk_bins": bins,
             "confidence_by_season": counts}
 
 
@@ -83,8 +98,9 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--src", type=Path, default=DEFAULT_SRC)
     ap.add_argument("--out", type=Path, default=DEFAULT_OUT)
+    ap.add_argument("--config", type=Path, default=None, help="configuration file (default: $MARS_CONFIG, else config/mars.yaml)")
     args = ap.parse_args()
-    print(json.dumps(build_weather_layer(args.src, args.out), indent=1))
+    print(json.dumps(build_weather_layer(args.src, args.out, cfg.risk_bins_from_config(args.config)), indent=1))
 
 
 if __name__ == "__main__":

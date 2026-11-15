@@ -1,14 +1,14 @@
 import pytest
 from shapely.geometry import shape
 
-from app.core.config import Settings
-from app.layers.base import LayerUnavailable
-from app.layers.poi.getter import PoiGetter
+from app.layers.poi.ingest import ingest_poi
+from app.layers.poi.service import PoiGetter
 from app.tiles.store import TileStore
 
 
 def make(settings):
-    return PoiGetter(settings, TileStore(settings.raw_dir / "tiles", settings.tile_sources, settings.aoi))
+    return PoiGetter(settings, TileStore(settings.raw_dir / "tiles", settings.tile_sources, settings.aoi),
+                     ingest_poi(settings))
 
 
 @pytest.fixture(scope="module")
@@ -50,13 +50,12 @@ def test_geology_clipped_to_aoi(poi):
 def test_sample_radius(poi):
     near = poi.sample(-70.0, -12.0)
     ids = [x["id"] for x in near]
-    assert "Aquieous_Mineral_Distribution_Options_clon0__0:0" in ids
-    assert "EZMars__3:0" in ids                     # polygon corner touches the point
-    assert "combinedNom__0:0" not in ids            # Garni is ~34 km away
+    assert "Aquieous_Mineral_Distribution_Options_clon0:0:0" in ids
+    assert "EZMars:3:0" in ids                     # polygon corner touches the point
+    assert "combinedNom:0:0" not in ids            # Garni is ~34 km away
     assert near == sorted(near, key=lambda x: x["distance_km"])
 
 
-def test_missing_features_dir(tmp_path):
-    with pytest.raises(LayerUnavailable) as ex:
-        make(Settings(data_dir=tmp_path))
-    assert "--only pois" in ex.value.fix
+def test_client_features_carry_kind_and_category(poi):
+    f = next(f for f in poi.features() if f["properties"]["name"] == "Silica detection")
+    assert f["properties"]["kind"] == "mineral_silica" and f["properties"]["category"] == "mineral"

@@ -1,45 +1,36 @@
-"""Layer 2: relief. Elevation grid -> slope -> slope classes, walkability overlay and point lookup."""
+"""Layer 2 service: client-facing format of ReliefData (slope classes, walkability overlay, point lookup)."""
 from __future__ import annotations
 
 from dataclasses import asdict
 
 import numpy as np
-import tifffile
 
-from app.layers.base import LayerUnavailable
+from app.layers.contracts import ReliefData
 from app.layers.relief.render import walkability_png
-from app.layers.relief.slope import classify, pixel_size_m, slope_degrees
+from app.layers.relief.slope import classify, pixel_size_m
 from app.tiles.store import TileStore
 
-NODATA_BELOW = -32000  # Trek exports noData as -32767
-CAVEATS = [
-    "The 200 m elevation grid underestimates local slope: all slope values are approximate, and short steep "
-    "features such as cliffs and crater rims are smoothed out.",
-    "Slope class thresholds are provisional and not yet confirmed for walking or vehicle limits.",
-]
+def caveats(resolution_m: int) -> list[str]:
+    return [
+        f"The {resolution_m} m elevation grid underestimates local slope: all slope values are approximate, and "
+        "short steep features such as cliffs and crater rims are smoothed out.",
+        "Slope class thresholds are provisional and not yet confirmed for walking or vehicle limits.",
+    ]
 
 
 class ReliefGetter:
     name = "relief"
 
-    def __init__(self, settings, store: TileStore):
-        path = settings.raw_dir / "dem" / "dem_blend200m_aoi.tif"
-        if not path.is_file():
-            raise LayerUnavailable(f"Elevation grid not found: {path}", "python scripts/download_data.py --only dem")
-        try:
-            elev = tifffile.imread(path).astype("float64")
-        except Exception as ex:  # noqa: BLE001
-            raise LayerUnavailable(f"Elevation grid unreadable: {ex}",
-                                   "python scripts/download_data.py --only dem --force") from ex
-        elev[elev <= NODATA_BELOW] = np.nan
+    def __init__(self, settings, store: TileStore, data: ReliefData):
+        self.data = data
         self._aoi = settings.aoi
         self._classes = settings.slope_classes
         self._store = store
-        self._elev = elev
-        self._slope = slope_degrees(elev, self._aoi)
+        self._elev = data.elev_m
+        self._slope = data.slope_deg  # the same array the graph builder reads
         self._class = classify(self._slope, self._classes)
         self._png = walkability_png(self._class, self._classes)
-        dx, dy = pixel_size_m(elev.shape, self._aoi)
+        dx, dy = pixel_size_m(self._elev.shape, self._aoi)
         self._resolution_m = int(round((dx + dy) / 2))
 
     def grid(self) -> dict:
@@ -50,13 +41,8 @@ class ReliefGetter:
         return self._png
 
     def _index(self, lon: float, lat: float) -> tuple[int, int] | None:
-        w, s, e, n = self._aoi
-        if not (w <= lon <= e and s <= lat <= n):
-            return None
-        ny, nx = self._elev.shape
-        col = min(int((lon - w) / (e - w) * nx), nx - 1)
-        row = min(int((n - lat) / (n - s) * ny), ny - 1)
-        return row, col
+        row, col = self.data.grid.lonlat_to_rc(lon, lat)
+        return None if int(row) < 0 else (int(row), int(col))
 
     def point(self, lon: float, lat: float) -> dict | None:
         idx = self._index(lon, lat)
@@ -82,7 +68,7 @@ class ReliefGetter:
             "slope_classes": [asdict(c) for c in self._classes],
             "overlay": {"url": "/api/get-layer-two/walkability.png", "bounds": bounds},
             "hillshade_sources": self._store.available("relief"),
-            "caveats": CAVEATS,
+            "caveats": caveats(self._resolution_m),
         }
 
     def sample(self, lon: float, lat: float, season: str | None = None) -> dict | None:

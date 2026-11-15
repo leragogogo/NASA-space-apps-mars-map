@@ -2,23 +2,22 @@ import numpy as np
 import pytest
 from tests.conftest import DEM_SHAPE, FIXTURE_SLOPE_DEG
 
-from app.core.config import Settings
-from app.layers.base import LayerUnavailable
-from app.layers.relief.getter import ReliefGetter
+from app.layers.relief.ingest import ingest_relief
+from app.layers.relief.service import ReliefGetter
 from app.tiles.store import TileStore
 
 
 @pytest.fixture(scope="module")
 def relief(fixture_settings):
     s = fixture_settings
-    return ReliefGetter(s, TileStore(s.raw_dir / "tiles", s.tile_sources, s.aoi))
+    return ReliefGetter(s, TileStore(s.raw_dir / "tiles", s.tile_sources, s.aoi), ingest_relief(s))
 
 
 def test_grid_is_single_source_of_truth(relief):
     g = relief.grid()
     assert g["elevation_m"].shape == g["slope_deg"].shape == g["slope_class"].shape == DEM_SHAPE
     assert np.allclose(g["slope_deg"], FIXTURE_SLOPE_DEG, atol=1e-3)
-    assert (g["slope_class"] == 1).all()  # 10 deg -> walkable
+    assert (g["slope_class"] == 1).all()  # 6 deg -> walkable
 
 
 def test_describe(relief):
@@ -47,8 +46,5 @@ def test_walkability_png_bytes(relief):
     assert relief.walkability_png()[:8] == b"\x89PNG\r\n\x1a\n"
 
 
-def test_missing_dem(tmp_path):
-    s = Settings(data_dir=tmp_path)
-    with pytest.raises(LayerUnavailable) as ex:
-        ReliefGetter(s, TileStore(s.raw_dir / "tiles", s.tile_sources, s.aoi))
-    assert "--only dem" in ex.value.fix
+def test_display_slope_is_the_ingested_graph_slope(relief):
+    assert relief.grid()["slope_deg"] is relief.data.slope_deg  # one array for users and the router
