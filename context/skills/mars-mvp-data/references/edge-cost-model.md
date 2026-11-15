@@ -19,11 +19,11 @@ edge = {
 
 Physical storage is **struct-of-arrays**, not a dict per edge. About 2.6M directed edges as Python dicts would take multiple GB; as float32 arrays, 2 profiles x 6 attributes is ~125 MB.
 
-- Graph topology: `src[m]`, `dst[m]`. The rustworkx edge payload is the edge id (index into every array).
+- Graph topology: `src[m]`, `dst[m]`. The edge id is the index into every array.
 - One array per `(profile, attribute)`, named `<profile>__<attr>` (e.g. `astronaut__cost`, `car__energy_wh`), all length `m`.
 - `app/graph/` exposes `edge_attrs(edge_id) -> dict` returning the logical view above, for the API, debugging and tests.
 - Every edge has every attribute for every profile. Impassable for a profile = `cost = inf` and all its other attributes `inf`. Such an edge is never on a returned path (the solver treats the pair as unreachable).
-- `cost` and the resources are >= 0 and never NaN (rustworkx rejects negative and NaN weights).
+- `cost` and the resources are >= 0 and never NaN (the Dijkstra needs non-negative, non-NaN weights). Dtypes: `cost` float64 (the solver sums many of them), resources float32. `app/graph/attrs.py` enforces that an impassable edge has `cost` and every resource inf together.
 
 ## 2. Canonical attributes and units
 
@@ -109,11 +109,13 @@ o2_g, co2_g, water_g = crew_n * rate * t                              (time-driv
 ## 7. How routing uses it
 
 - The matrix and solver use `cost` only (SKILL.md steps 4-5).
-- After solving, each leg's resources are summed over its edges: `attrs[profile][attr][edge_id]` for each consecutive node pair, with `edge_id = g.get_edge_data(a, b)`. Report per-leg and total resources in the response.
+- After solving, each leg's resources are summed over its edges: `attrs[profile][attr][edge_id]` for each consecutive node pair, with `edge_id = routing_graph.edge_id(a, b)`. Report per-leg and total resources in the response.
 - Compare totals with capacities from config (`o2_g`, `co2_g`, `water_g`, `energy_wh`, `time_s`) and add a warning per exceeded budget, with a reserve margin (config, e.g. 20 %). MVP does not enforce budgets inside the search.
 - Future (not MVP): walk-back feasibility. Run Dijkstra backwards from the habitat to get a per-node return cost for each resource, then keep a node only if `outbound + return <= capacity * (1 - reserve)`. A car trip must also stay within walking range of the habitat using the astronaut resources. Needs a habitat location in the request or config.
 
 ## 8. Config schema (names only)
+
+Implemented for now as frozen dataclasses with placeholder defaults in `app/routing/profiles/params.py` (`AstronautParams`, `CarParams`), each unconfirmed value marked `TODO`. `formula_version` carries a hash of the parameters, so editing a number marks saved graphs stale. They move under `app/core/config` once the config module exists.
 
 Under `app/core/config`: `profiles.<profile>.{hard_limit_deg, alpha, beta, p, ...params above}`, `capacities.<profile>.{o2_g, co2_g, water_g, energy_wh, time_s}`, `reserve_margin`, `formula_version`.
 

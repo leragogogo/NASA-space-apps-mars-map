@@ -16,7 +16,8 @@ def make_graph(m=3):
     edge_arrays = {attr_key(p, a): np.full(m, float(i + 1), dtype=np.float32)
                    for i, p in enumerate(PROFILES) for a in EDGE_ATTRS}
     return GraphData(grid=grid, node=node, src=np.array([0, 1, 2][:m]), dst=np.array([1, 2, 3][:m]),
-                     edge_arrays=edge_arrays, formula_version="test-1", source_hashes={"dem": "abc"})
+                     edge_arrays=edge_arrays, formula_version="test-1", source_hashes={"dem": "abc"},
+                     build_params={"neighbours": 8})
 
 
 def test_valid_graph_and_logical_edge_view():
@@ -68,3 +69,29 @@ def test_save_load_roundtrip(tmp_path):
     for key, arr in g.edge_arrays.items():
         np.testing.assert_array_equal(h.edge_arrays[key], arr)
     assert h.edge_attrs(0) == g.edge_attrs(0)
+
+
+def test_fingerprint_roundtrips_and_read_meta_needs_no_arrays(tmp_path):
+    g = make_graph()
+    path = tmp_path / "g.npz"
+    g.save(path)
+    fp = g.fingerprint()
+    assert fp["build_params"] == {"neighbours": 8} and fp["source_hashes"] == {"dem": "abc"}
+    assert fp["formula_version"] == "test-1" and fp["grid"] == g.grid.to_dict()
+    assert GraphData.read_meta(path) == fp
+    assert GraphData.load(path).build_params == {"neighbours": 8}
+
+
+def test_unknown_format_version_is_rejected(tmp_path):
+    import json
+    g = make_graph()
+    path = tmp_path / "g.npz"
+    g.save(path)
+    with np.load(path) as z:
+        arrays = {k: z[k] for k in z.files}
+    meta = json.loads(str(arrays["__meta__"]))
+    meta["format_version"] = 999
+    arrays["__meta__"] = np.array(json.dumps(meta))
+    np.savez_compressed(path, **arrays)
+    with pytest.raises(ValueError, match="unsupported graph format"):
+        GraphData.load(path)

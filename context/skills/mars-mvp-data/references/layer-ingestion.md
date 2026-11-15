@@ -47,7 +47,7 @@ The one grid every layer is resampled to and the graph is built on.
 
 Helpers: `node_id(row, col) = row * ncols + col` and its inverse, `lonlat_center(row, col)`, `lonlat_to_rc(lon, lat)`, `contains(lon, lat)`, `metric_spacing()` (dx, dy in m at each row).
 
-Default grid: the 200 m DEM (1200 x 1073) coarsened by a factor of 2 (about 400 m, ~330k nodes). Configurable (`GridSpec.from_dem(path, coarsen=2)`). Nodes sit at cell centres.
+Default grid: the relief getter's own 200 m grid (1200 x 1073, 1,287,600 nodes). A coarser grid is an option (`graph_inputs_from_registry(..., coarsen=N)`, `python -m app.graph --coarsen N`). Nodes sit at cell centres.
 
 ## 4. Per-layer contract
 
@@ -66,7 +66,7 @@ Default grid: the 200 m DEM (1200 x 1073) coarsened by a factor of 2 (about 400 
 - Shelter candidates (pits/depressions from the DEM) are not implemented; reserve `kind = "shelter_candidate"`.
 
 ### Weather (`app/layers/weather/`)
-- Reads: `data/raw/weather/context_weather_frames.geojson` (1 deg cells x 4 seasons). **This file is not produced by the download script yet.** Until that decision lands (copy from `data-exploration/outputs/weather/` or run skill scripts 06 -> 07), develop against `fake_weather` or a copy of that file.
+- Reads: `data/raw/weather/context_weather_frames.geojson` (1 deg cells x 4 seasons, 6,400 frames), produced by `python scripts/download_data.py` (the `weather` step, code in `scripts/weather/`, computed from the raw MDAD file with the logic of skill scripts 06 -> 07). Optional keys of a frame (`typical_year_rate`, `typical_year_risk`, `extreme_year`, `neighbour_estimate`) are **absent, not null**, when they do not apply; `message`, `confidence`, `season` are always present. Develop against `fake_weather` until the ingestion exists.
 - `WeatherData`: `seasons` (the four exact strings, fixed order: `S. Autumn (Ls 0-90)`, `S. Winter (Ls 90-180)`, `S. Spring (Ls 180-270, perihelion)`, `S. Summer (Ls 270-360)`), `risk` int8 `(4, nrows, ncols)` (0 Low, 1 Moderate, 2 High, -1 no estimate), `confidence` int8 `(4, nrows, ncols)` (0 reliable, 1 approximate, 2 insufficient_data), `frame_idx` int32 `(nrows, ncols)` into `frames`, `frames` (one record per 1 deg cell with the full per-season frame fields from SKILL.md section 6, including `message`), `caveat` (the global caveat string).
 - `risk` is the **display risk**: `typical_year_risk`, else `risk`, else `neighbour_estimate.risk`, else -1.
 - `frame_at(lon, lat, season) -> WeatherFrame` for warnings.
@@ -81,7 +81,7 @@ Default grid: the 200 m DEM (1200 x 1073) coarsened by a factor of 2 (about 400 
 ## 5. What the graph builder receives
 
 ```python
-class GraphInputs:        # produced by app.layers.load_all(grid)
+class GraphInputs:        # produced by app.graph.getters.graph_inputs_from_registry
     grid: GridSpec
     relief: ReliefData
     weather: WeatherData
@@ -114,7 +114,7 @@ All coordinates in responses are lon/lat (-180..180). Pydantic models in `app/sc
 - `app/layers/relief/slope.py`: `slope_deg(elev_m, grid)`, the one slope implementation.
 - `app/core/resources.py`: `ProfileId`, `EDGE_ATTRS`, `UNITS`, `attr_key`.
 - `app/core/profiles.py`: `EdgeGeometry`, `ProfileModel` protocol, `check_edge_attrs` (the graph builder <-> profile formulas interface).
-- `app/graph/contracts.py`: `GraphData` (struct-of-arrays graph, `edge_attrs(edge_id)` logical view, `save`/`load` to `graph.npz`).
+- `app/graph/contracts.py`: `GraphData` (struct-of-arrays graph, `edge_attrs(edge_id)` logical view, `save`/`load`/`read_meta` to `graph.npz`, `fingerprint()` for staleness, `build_params`, `FORMAT_VERSION`).
 - `app/routing/contracts.py`: `RouteQuery`, `CostMatrix`, `SolverResult`, `Leg`, `RoutePlan`, `RouteLimits`, `EndMode`, `DropReason` (hand-offs between request, matrix, solver and assembly).
 - `app/schemas/route.py`, `app/schemas/layers.py`: the API models.
 
@@ -125,14 +125,14 @@ Every ingestion module's definition of done: its real `ingest` passes `validate_
 | Package | Depends on | Develops against |
 |---|---|---|
 | 0. contracts + fakes + validators + `app/core/resources.py` | **done** | |
-| A. relief ingest + service | 0 | real DEM |
-| B. poi ingest + service | 0 | real features |
-| C. weather ingest + service | 0 | copy of the weather GeoJSON or `fake_weather` |
+| A. relief ingest + service | 0 | real DEM. `relief/getter.py` (upstream) is what the graph reads |
+| B. poi ingest + service | 0 | real features. `poi/getter.py` is what the graph reads |
+| C. weather ingest + service | 0 | `data/raw/weather/` (written by `download_data.py --only weather`) or `fake_weather`. `weather/getter.py` is what the graph and the API read |
 | D. imagery catalog + tile service | 0 | real tiles |
-| E. profile cost/resource functions (`compute_edge_attrs`) | 0 | pure arrays, no layers |
-| F. graph builder, saver, loader | 0, E | `fake_inputs` |
+| E. profile cost/resource functions (`compute_edge_attrs`) | **done** (`app/routing/profiles/`: Tobler + Minetti astronaut, traction car; every parameter is a placeholder, see `edge-cost-model.md`) | pure arrays, no layers |
+| F. graph builder, saver, loader | 0, E | `fake_inputs`, stub profiles (`app/graph/fakes.py`). **Done and tested:** `edges`, `geometry`, `attrs`, `nodes`, `build`, `store`, `loader` (`RoutingGraph`), `lifespan`, `python -m app.graph --fake`. `python -m app.graph` builds the real graph from the layer getters (`app/graph/getters/`) with the real profile models (about 10 s, 321,600 nodes, 2.57 M edges) |
 | G. routing matrix, solver, assembly | **done** (`app/routing/`, SKILL.md section 10) | tiny hand-built graphs |
 | H. API routers + schemas | 0 | fakes |
 | I. frontend | endpoint table above | mocked JSON |
 
-Integration happens when A-D replace the fakes in `load_all`.
+`app.graph.getters.graph_inputs_from_registry(registry, settings, coarsen=1)` is the integration point: it builds `GraphInputs` from the relief, weather and POI getters through their public methods (`grid()`, `cells()`/`describe()`, `features()`) and runs `validate_inputs`. The graph therefore sees what the map shows; relief is the getter's own 200 m elevation and slope arrays, unchanged at the default `coarsen=1` (so the routed slope is exactly the displayed slope). The graph has 1.29 M nodes and 10.3 M edges and routes in seconds because the routing engine keeps everything in NumPy arrays and runs SciPy's Dijkstra. The `service.py` split and the imagery catalog are out of scope.

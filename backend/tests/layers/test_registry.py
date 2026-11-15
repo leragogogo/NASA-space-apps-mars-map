@@ -17,4 +17,4 @@ def test_missing_data_is_recorded_not_raised(tmp_path):
     assert all(v != "ok" for v in reg.status().values())
     with pytest.raises(LayerUnavailable) as ex:
         reg.get("weather")
-    assert ex.value.fix == "python scripts/build_weather/build_weather.py"
+    assert ex.value.fix == "python scripts/download_data.py --only weather"

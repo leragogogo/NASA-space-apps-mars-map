@@ -6,13 +6,14 @@ Layout written under <repo>/data/raw/ (gitignored; same paths the skill scripts 
   dem/dem_blend200m_aoi.tif          Layer 2  MOLA+HRSC 200 m DEM, float32 metres, AOI only
   tiles/<label>/<z>/<row>/<col>.ext  Layers 1-3  WMTS tiles over the AOI (row/col are WMTS, top-left origin)
   features/<service>__<id>.geojson   Layer 3  POI vectors intersecting the AOI
-  mdad/MDAD_original                 Layer 4  Mars Dust Activity Database CSV (input for skill scripts 06-07)
+  mdad/MDAD_original                 Layer 4  Mars Dust Activity Database CSV (raw input)
+  weather/*.geojson|json|csv         Layer 4  seasonal dust-storm risk frames computed from MDAD (scripts/weather/)
   manifest.json                      what was fetched, when, and counts
 
 Usage (from repo root):
   pip install -r scripts/requirements.txt
   python scripts/download_data.py                  # everything
-  python scripts/download_data.py --only dem mdad  # a subset: dem | tiles | pois | mdad
+  python scripts/download_data.py --only dem mdad  # a subset: dem | tiles | pois | mdad | weather
   python scripts/download_data.py --max-zoom 8     # fewer tiles
   python scripts/download_data.py --force          # re-download existing files
 
@@ -256,10 +257,26 @@ def fetch_mdad(force):
     return {"file": str(out.relative_to(ROOT)), "rows": rows}
 
 
+# ------------------------------------------------------------------ weather (computed from MDAD)
+def fetch_weather(force):
+    """Compute the static weather layer from the raw MDAD file (downloading MDAD first if needed)."""
+    out_dir = RAW / "weather"
+    target = out_dir / "context_weather_frames.geojson"
+    if target.exists() and not force:
+        print(f"[weather] exists, skipping: {target.relative_to(ROOT)}")
+        return {"file": str(target.relative_to(ROOT)), "skipped": True}
+    fetch_mdad(False)  # no-op when the file is already there
+    from weather.build import build_weather_layer  # lazy: needs pandas and scipy
+
+    summary = build_weather_layer(RAW / "mdad" / "MDAD_original", out_dir)
+    print(f"[weather] {summary['frames']} frames -> {out_dir.relative_to(ROOT)}  {summary['confidence_by_season']}")
+    return summary
+
+
 # ------------------------------------------------------------------ main
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--only", nargs="+", choices=["dem", "tiles", "pois", "mdad"],
+    ap.add_argument("--only", nargs="+", choices=["dem", "tiles", "pois", "mdad", "weather"],
                     help="fetch only these datasets (default: all)")
     ap.add_argument("--min-zoom", type=int, default=5)
     ap.add_argument("--max-zoom", type=int, default=9,
@@ -267,7 +284,7 @@ def main():
     ap.add_argument("--workers", type=int, default=16)
     ap.add_argument("--force", action="store_true", help="re-download files that already exist")
     args = ap.parse_args()
-    todo = args.only or ["dem", "tiles", "pois", "mdad"]
+    todo = args.only or ["dem", "tiles", "pois", "mdad", "weather"]
 
     manifest_path = RAW / "manifest.json"
     manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {}
@@ -281,6 +298,7 @@ def main():
         "tiles": lambda: fetch_tiles(args.force, args.min_zoom, args.max_zoom, args.workers),
         "pois": lambda: fetch_pois(args.force),
         "mdad": lambda: fetch_mdad(args.force),
+        "weather": lambda: fetch_weather(args.force),
     }
     for name in todo:
         try:

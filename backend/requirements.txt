@@ -1,8 +1,8 @@
 fastapi
 uvicorn[standard]
-rustworkx
 ortools
 numpy
+scipy
 pytest
 tifffile
 pillow

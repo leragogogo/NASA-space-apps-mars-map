@@ -48,10 +48,9 @@ The datasets are not stored in git (`data/` is gitignored). After cloning, run t
 
 ```bash
 pip install -r scripts/requirements.txt
-python scripts/download_data.py        # DEM, map tiles, POI vectors and MDAD storm data -> data/raw/
-python scripts/build_weather/build_weather.py   # Layer 4 dust-storm grid -> data/derived/weather/
+python scripts/download_data.py        # DEM, map tiles, POI vectors, MDAD storm data and the Layer 4 dust-storm grid -> data/raw/
 ```
 
-Script tests: `pytest scripts/build_weather/tests`
+Script tests: `cd scripts && pytest`
 
 Project context for humans and agents: `context/skills/mars-mvp-data/SKILL.md`.

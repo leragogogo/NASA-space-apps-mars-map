@@ -62,7 +62,7 @@ def test_missing_data_gives_503(empty_client):
         "/api/get-layer-two/walkability.png": "download_data.py --only dem",
         "/api/get-layer-two/point?lon=-70&lat=-12": "download_data.py --only dem",
         "/api/get-layer-three": "download_data.py --only pois",
-        "/api/get-layer-four?season=winter": "build_weather/build_weather.py",
+        "/api/get-layer-four?season=winter": "download_data.py --only weather",
     }
     for url, fix in expected_fix.items():
         r = empty_client.get(url)

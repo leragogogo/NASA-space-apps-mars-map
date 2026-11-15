@@ -95,7 +95,7 @@ def build_fixture_data(root: Path) -> Path:
         (feats / f"{stem}.geojson").write_text(json.dumps(fc))
 
     # --- weather: 3 cells x 4 seasons; winter has one cell per confidence level
-    weather = root / "derived/weather"
+    weather = root / "raw/weather"
     weather.mkdir(parents=True)
     cells = []
     for key, name in SEASON_NAMES.items():

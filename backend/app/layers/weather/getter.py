@@ -1,4 +1,4 @@
-"""Layer 4: seasonal dust-storm risk on the 1 deg Valles Marineris grid (built by scripts/build_weather/build_weather.py)."""
+"""Layer 4: seasonal dust-storm risk on the 1 deg Valles Marineris grid (built by `download_data.py --only weather` into data/raw/weather)."""
 from __future__ import annotations
 
 import json
@@ -37,12 +37,12 @@ class WeatherGetter:
     name = "weather"
 
     def __init__(self, settings):
-        folder = settings.derived_dir / "weather"
+        folder = settings.raw_dir / "weather"
         grid_file, aoi_file = folder / "context_weather_frames.geojson", folder / "aoi_weather_frames.json"
         missing = [f.name for f in (grid_file, aoi_file) if not f.is_file()]
         if missing:
             raise LayerUnavailable(f"Weather files not found in {folder}: {', '.join(missing)}",
-                                   "python scripts/build_weather/build_weather.py")
+                                   "python scripts/download_data.py --only weather")
         grid = json.loads(grid_file.read_text())
         aoi = json.loads(aoi_file.read_text())
         key_of = {v: k for k, v in SEASONS.items()}

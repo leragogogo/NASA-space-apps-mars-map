@@ -17,7 +17,7 @@ def make_query(profile="astronaut", destinations=(3, 1, 4), **kwargs):
 
 def assert_continuous(route):
     for from_node, to_node in zip(route.nodes, route.nodes[1:]):
-        assert CLIFF_GRAPH.graph.has_edge(from_node, to_node)
+        assert CLIFF_GRAPH.edge_id(from_node, to_node) >= 0
 
 
 def test_astronaut_drops_the_stop_beyond_the_cliff():
