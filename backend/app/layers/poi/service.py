@@ -1,53 +1,37 @@
-"""Layer 3: points of interest. All Trek vector files in one normalised FeatureCollection."""
+"""Layer 3 service: client-facing GeoJSON of PoiData, filtered by category."""
 from __future__ import annotations
 
-import json
-import logging
 import math
 
 import numpy as np
 import shapely
-from shapely.geometry import Point, box, mapping, shape
+from shapely.geometry import Point, shape
 
-from app.layers.base import LayerUnavailable
-from app.layers.poi.normalize import CATEGORIES, CLIP_TO_AOI, DATASETS, normalize_feature
+from app.layers.contracts import PoiData, PoiFeature
+from app.layers.poi.normalize import CATEGORIES
 from app.layers.relief.slope import M_PER_DEG
 from app.tiles.store import TileStore
 
-log = logging.getLogger(__name__)
+
+def to_client_feature(f: PoiFeature) -> dict:
+    p = f.properties
+    return {"type": "Feature", "geometry": dict(f.geometry),
+            "properties": {"id": f.id, "kind": f.kind.value, "category": p["category"], "name": f.name,
+                           "description": p["description"], "source": p["source_title"], "raw": p["raw"]}}
 
 
 class PoiGetter:
     name = "poi"
 
-    def __init__(self, settings, store: TileStore):
-        folder = settings.raw_dir / "features"
-        files = sorted(folder.glob("*.geojson")) if folder.is_dir() else []
-        if not files:
-            raise LayerUnavailable(f"No point-of-interest files found in {folder}",
-                                   "python scripts/download_data.py --only pois")
-        w, s, e, n = settings.aoi
-        aoi_box = box(w, s, e, n)
-        features = []
-        for f in files:
-            if f.stem not in DATASETS:
-                log.warning("Skipping unknown POI dataset %s", f.name)
-                continue
-            for i, raw in enumerate(json.loads(f.read_text()).get("features", [])):
-                feat = normalize_feature(f.stem, i, raw)
-                if f.stem in CLIP_TO_AOI and feat["geometry"]:
-                    clipped = shape(feat["geometry"]).intersection(aoi_box)
-                    if clipped.is_empty:
-                        continue
-                    feat["geometry"] = json.loads(json.dumps(mapping(clipped)))  # tuples -> lists
-                features.append(feat)
-        self._features = features
+    def __init__(self, settings, store: TileStore, data: PoiData):
+        self.data = data
+        self._features = [to_client_feature(f) for f in data.features]
         self._store = store
         self._radius_km = settings.poi_sample_radius_km
+        s, n = settings.aoi[1], settings.aoi[3]
         # Local flat projection in km (good enough over the ~4 deg demo area) for distance checks.
         self._k = np.array([M_PER_DEG / 1000 * math.cos(math.radians((s + n) / 2)), M_PER_DEG / 1000])
-        self._geoms_km = [shapely.transform(shape(f["geometry"]), lambda c: c * self._k) if f["geometry"] else None
-                          for f in features]
+        self._geoms_km = [shapely.transform(shape(f.geometry), lambda c: c * self._k) for f in data.features]
 
     def features(self, categories: set[str] | None = None) -> list[dict]:
         if not categories:

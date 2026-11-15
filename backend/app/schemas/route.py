@@ -1,12 +1,11 @@
 """API models for POST /api/route. The backend owns this format; the frontend consumes it."""
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.core.resources import ProfileId
-from app.layers.contracts import SEASONS
 from app.routing.contracts import DropReason, EndMode, RouteLimits
 
 _LIMITS = RouteLimits()
@@ -24,19 +23,12 @@ class RouteRequest(BaseModel):
     end_mode: EndMode = EndMode.ROUND_TRIP
     end: LonLat | None = None
     time_limit_s: float = _LIMITS.default_time_limit_s
-    season: str | None = None
+    season: Literal["autumn", "winter", "spring", "summer"] | None = None  # same keys as /api/get-layer-four
 
     @field_validator("time_limit_s")
     @classmethod
     def _clamp_time(cls, v: float) -> float:
         return _LIMITS.clamp_time_limit(v)
-
-    @field_validator("season")
-    @classmethod
-    def _known_season(cls, v: str | None) -> str | None:
-        if v is not None and v not in SEASONS:
-            raise ValueError(f"season must be one of {SEASONS}")
-        return v
 
     @model_validator(mode="after")
     def _end_matches_mode(self):

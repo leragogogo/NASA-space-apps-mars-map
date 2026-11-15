@@ -4,7 +4,6 @@ import numpy as np
 import pytest
 
 from app.core.resources import RESOURCES, ProfileId
-from app.routing.graph import SnapError
 from tests.routing.helpers import INF, both, make_graph, resource_factor
 
 
@@ -65,10 +64,3 @@ def test_shortest_paths_and_trace(routing_graph):
 def test_parallel_edges_are_rejected():
     with pytest.raises(ValueError, match="parallel"):
         make_graph(2, [(0, 1, 1.0), (0, 1, 2.0)])
-
-
-def test_snap_returns_the_nearest_valid_node_and_rejects_outside(routing_graph):
-    s = routing_graph.snap(float(routing_graph.lon[2]), float(routing_graph.lat[2]))
-    assert s.node == 2 and s.distance_m == pytest.approx(0.0, abs=1e-6)
-    with pytest.raises(SnapError, match="outside"):
-        routing_graph.snap(0.0, 0.0)

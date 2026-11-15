@@ -8,6 +8,7 @@ it is tested with fake inputs and stub profiles.
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
@@ -33,10 +34,22 @@ class BuildConfig:
         return {"neighbours": self.neighbours}
 
 
+_SHA256 = re.compile(r"^[0-9a-f]{64}$")
+
+
 def hash_sources(source_files: Sequence[str], root: Path) -> dict[str, str]:
-    """sha256 of every source file (relative to root): the provenance stored in the graph."""
+    """sha256 of every source file: the provenance stored in the graph.
+
+    An entry is either `relative/path:sha256` (what layer ingestion records, used as is) or a bare path
+    relative to `root` (hashed here).
+    """
     out = {}
-    for rel in sorted(set(source_files)):
+    for entry in sorted(set(source_files)):
+        rel, _, digest = entry.rpartition(":")
+        if rel and _SHA256.match(digest):
+            out[rel] = digest
+            continue
+        rel = entry
         path = Path(root) / rel
         if not path.is_file():
             raise FileNotFoundError(f"source file {rel!r} listed by a layer does not exist under {root}")

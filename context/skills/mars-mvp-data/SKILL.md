@@ -285,7 +285,7 @@ frontend/src/
   features/{map,layers,route}/  Leaflet map, layer toggles/season switcher, route UI
   hooks/, config/, utils/
 ```
-Step 0 is done: the shared contracts exist and are tested (see `references/layer-ingestion.md` section 7). The graph is built from the layer getters (`app/graph/getters/`) and the profile formulas are in `app/routing/profiles/`; getters, graph and routing engine are integrated and tested end to end (`tests/integration/test_graph_integration.py`). Package G (routing engine) is done (`app/routing/`, see section 10 "Implementation"). All other module folders are still empty placeholders (`.gitkeep`).
+Step 0 is done: the shared contracts exist and are tested (see `references/layer-ingestion.md` section 7). Package G (routing engine) and package H (API controller: layer, tile and route endpoints) are done (`app/routing/`, `app/api/routes/`, see section 10 "Implementation"). The four layer modules (packages A-D) are done: `app/layers/<layer>/ingest.py` + `service.py`, plus `app/layers/inputs/load.py: load_all`. The graph (package F) is built from `load_all` with the profile formulas of `app/routing/profiles/`; layers, graph and routing engine are integrated and tested end to end (`tests/integration/test_graph_integration.py`). All other module folders are still empty placeholders (`.gitkeep`).
 
 ## 10. Multi-destination routing (decided: SciPy Dijkstra on NumPy arrays + Google OR-Tools)
 A user picks a profile, a start, several destinations and optionally an end. The backend returns one continuous path that visits the reachable destinations in the best order it finds, and reports the ones it had to drop.
@@ -323,7 +323,7 @@ A user picks a profile, a start, several destinations and optionally an end. The
 ### Step 2: startup: `app/graph/loader.py` (FastAPI lifespan)
 - Load `graph.npz` once and build the `RoutingGraph` (`RoutingGraph.from_graph_data`): `src`/`dst` int32, per-profile `cost` float64 and resource arrays indexed by **edge id**, a sorted `src * n + dst` key array for edge-id lookup, and (lazily, per profile) a SciPy CSR matrix of the finite-cost edges.
 - If `graph.npz` is missing the app fails at startup with a clear message to run `python -m app.graph` (it does not build silently).
-- The loader's output is the `RoutingGraph` (`app/routing/graph.py`, loaded by `app/graph/loader.load_routing_graph`): arrays, `shortest_paths`, `trace_path`, `edge_id(s)`, `path_cost`, `path_resources`, `coords`, and `snap(lon, lat)`. Routing codes against it.
+- The loader's output is a `RoutingContext` (`app/graph/loader.py`): the `RoutingGraph` (`app/routing/graph.py`: arrays, `shortest_paths`, `trace_path`, `edge_id(s)`, `path_cost`, `path_resources`, `coords`) plus the KD-tree used by `app/routing/snap.py`. Routing codes against it.
 - Keep every array as NumPy: nothing is stored per edge as a Python object (no cost lists, no per-edge callbacks).
 - Keep the lookup structures in app state:
   - node index → (lon, lat) from the arrays
@@ -340,7 +340,7 @@ Request:
   "end_mode": "round_trip",        // "round_trip" (default) | "fixed" | "open"
   "end": null,                     // required only when end_mode = "fixed"
   "time_limit_s": 10,              // optional, default DEFAULT_TIME_LIMIT_S = 10 (app/routing/contracts.py), clamped to 1..30
-  "season": "S. Winter (Ls 90-180)"  // optional, for weather warnings only, never for weights
+  "season": "winter"  // autumn | winter | spring | summer (same keys as /api/get-layer-four); optional, for weather warnings only, never for weights
 }
 ```
 - **Snap** each point to the nearest valid node with the KD-tree. Return the snapped coordinates and the snap distance. Reject points outside the graph bbox or farther than a configurable maximum (e.g. 1 km).
@@ -412,7 +412,7 @@ Request:
 ### Implementation (package G, done): `backend/app/routing/`
 | File | Entry point |
 |---|---|
-| `graph.py` | `RoutingGraph.from_graph_data(GraphData)`: NumPy arrays (`src`, `dst`, per-profile `cost` and resources, node lon/lat/valid) plus lazy per-profile CSR matrices. `shortest_paths`, `trace_path`, `edge_id`/`edge_ids`, `path_cost`, `path_resources`, `coords(nodes) -> [[lon, lat], ...]`, `snap`. `app/graph/loader.load_routing_graph` calls `from_graph_data` at startup. |
+| `graph.py` | `RoutingGraph.from_graph_data(GraphData)`: NumPy arrays (`src`, `dst`, per-profile `cost` and resources, node lon/lat/valid) plus lazy per-profile CSR matrices. `shortest_paths`, `trace_path`, `edge_id`/`edge_ids`, `path_cost`, `path_resources`, `coords(nodes) -> [[lon, lat], ...]`. `app/graph/loader.load_routing_context` calls `from_graph_data` at startup. |
 | `matrix.py` | `build_cost_matrix(routing_graph, profile, point_nodes) -> CostMatrix` (step 4) |
 | `solver.py` | `solve(cost_matrix, end_mode, time_limit_s) -> SolverResult` (step 5); `NoFeasibleRoute` when no route exists at all (unreachable fixed end) |
 | `assemble.py` | `assemble(routing_graph, query, cost_matrix, solution, capacities=None, reserve_margin=0.0) -> RoutePlan` (step 6); budget warnings only when capacities are passed |
@@ -423,6 +423,17 @@ Notes for package H (API):
 - `LegOut` labels: `from`/`to` is `"start"`, a destination index (0-based, request order) or `"end"` (fixed end). `Leg.from_point`/`to_point` are CostMatrix point indices: point 0 = `"start"`, point k (1..D) = destination k-1, point D+1 = `"end"`. A round trip's last leg goes `to: "start"`; an open end has no final leg.
 - `path`: `{"type": "LineString", "coordinates": routing_graph.coords(plan.nodes)}`. A round trip that visits nothing has a single coordinate.
 - `weight`/`total_weight` in the API = `cost`/`total_cost` internally.
+
+### Implementation (package H, API controller, done)
+| File | Role |
+|---|---|
+| `app/api/routes/route.py` | `POST /api/route`: thin controller; 503 if the graph is unavailable, 422 for `SnapError`, `RouteRequestError`, `NoFeasibleRoute` |
+| `app/routing/request.py` | `handle_route_request`: snap, duplicate check (names the points, e.g. `destination 0 = destination 1`), `plan_route`, `RoutePlan` -> `RouteResponse`; weather `message` of every visited point's cell goes verbatim into `warnings` (only when `season` is given; "unknown" warnings if the cell or the layer is missing) |
+| `app/routing/snap.py` | `snap`: nearest valid node, rejects points outside the grid bbox or farther than `Settings.max_snap_distance_m` (1000 m) |
+| `app/graph/loader.py` | `load_routing_context(settings)`: `data/graph/graph.npz` -> `RoutingContext` (RoutingGraph + KD-tree over valid nodes); called in the FastAPI lifespan, stored in `app.state.routing` (a `LayerUnavailable` if the file is missing, so only `/api/route` answers 503) |
+- `Settings` gained `capacities` ({profile: {resource: capacity}}, empty = no budget warnings until the values are confirmed), `reserve_margin` (0.2), `max_snap_distance_m`, `graph_file`.
+- `app/graph/build.py` (package F, writes `graph.npz`) does not exist yet: until it does, `/api/route` returns 503 with a `fix` hint.
+- Season: both `/api/get-layer-four` and `/api/route` take the short key (`autumn|winter|spring|summer`); the long names (`S. Winter (Ls 90-180)`) only exist inside the weather data.
 
 ### Tests (`backend/tests/routing/`, see section 11)
 Use tiny hand-built graphs:
@@ -456,3 +467,25 @@ These apply to every agent and every change.
 4. **Cover the edge cases named in this skill:** unreachable and isolated stops, `inf` weights, uphill versus downhill asymmetry, missing-data confidence labels, longitude wrap (0-360 versus -180..180), nodata cells.
 5. **Run the tests before you finish, and report failures honestly.** Do not mark work done on a red or skipped suite without saying so.
 6. **Keep the docs in step with the code.** If a change alters a contract, formula, endpoint or folder, update the matching file in `references/` (or this file) and `AGENTS.md` in the same change.
+
+## 12. Notes for the team: changes from the controller / layer work (2026-11-15)
+Read this if you work on the frontend or the graph builder. Details live in `references/layer-ingestion.md` (sections 4-6, 8) and section 10 "Implementation (package H)".
+
+**API contract changes (frontend)**
+- `POST /api/route`: `season` takes the short keys `autumn | winter | spring | summer`, the same as `GET /api/get-layer-four?season=`. The long name (`S. Winter (Ls 90-180)`) is rejected with 422. The weather GeoJSON still carries the long name in `properties.season` (and `season_name` in the response); use that for display.
+- POI ids are now `<service>:<layer>:<id>`, e.g. `EZMars:3:0` (was `EZMars__3:0`). POI features also carry `kind` (graph-side enum) next to `category` (the API filter).
+- Layer 1 sources have an extra field `role` (`primary | fallback | zoom-in detail`).
+- Endpoint paths are the implemented ones (`/api/get-layer-one` ... `four`, `/api/tiles/...`), listed in `layer-ingestion.md` section 6.
+- `POST /api/route` answers 503 (`detail` + `fix`) until `data/graph/graph.npz` exists; 422 for points outside the graph, farther than `max_snap_distance_m` (1000 m) from a node, snapped to the same node, or an unreachable fixed end. Dropped stops are a normal 200 result.
+
+**Layer structure (graph builder)**
+- Every layer has `ingest.py` (raw files -> contract data on the shared grid, validated) and `service.py` (client format; the classes are still called `...Getter`). `app/layers/inputs/load.py: load_all(settings, grid=None)` returns `GraphInputs` and raises `LayerDataError` when data is missing. The graph builder must use only that.
+- Shared grid: `app/layers/relief/ingest.py: grid_for(settings)`, the DEM shape divided by `Settings.grid_coarsen` (default 2, about 400 m). The relief overlay shown to users and the slope used for routing are the same array (`ReliefData.slope_deg`). With `grid_coarsen=1` the graph would have ~1.3M nodes.
+- Weather data lives in `data/derived/weather/` (built by `python scripts/build_weather/build_weather.py`), not in `data/raw/`.
+- Not implemented (optional in the contract): `ReliefData.roughness_m`, `PoiData.nearest_poi_*`.
+
+**Still open**
+- Graph builder (`app/graph/build.py`) and the per-profile cost/resource formulas (`app/routing/profiles.py`) do not exist yet.
+- `Settings.capacities` is empty (no budget warnings) until the product owner confirms the values.
+- Everything is tested against synthetic fixtures only; nobody has run it against the real `data/` yet.
+- Use Python >= 3.11 (`enum.StrEnum`).

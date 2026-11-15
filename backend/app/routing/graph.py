@@ -15,25 +15,12 @@ from typing import Mapping, Sequence
 import numpy as np
 from scipy import sparse
 from scipy.sparse.csgraph import dijkstra
-from scipy.spatial import cKDTree
 
 from app.core.resources import PROFILES, RESOURCES, ProfileId
 from app.graph.contracts import GraphData
 from app.layers.contracts import GridSpec
 
 NO_PREDECESSOR = -9999  # what scipy stores for "no predecessor"
-
-
-class SnapError(ValueError):
-    """A point cannot be snapped to the graph (outside the area, or too far from any valid node)."""
-
-
-@dataclass(frozen=True)
-class SnapResult:
-    node: int
-    lon: float  # the snapped node's position
-    lat: float
-    distance_m: float  # from the requested point to the node
 
 
 @dataclass(frozen=True, eq=False)
@@ -45,10 +32,10 @@ class RoutingGraph:
     resources: Mapping[ProfileId, Mapping[str, np.ndarray]]  # per profile and resource, by edge id
     lon: np.ndarray  # per node id
     lat: np.ndarray
-    valid: np.ndarray  # per node id: has elevation data (snap targets)
+    valid: np.ndarray  # per node id: has elevation data
     _edge_keys: np.ndarray  # sorted src * n_nodes + dst
     _edge_order: np.ndarray  # edge id of each sorted key
-    _cache: dict = field(default_factory=dict)  # lazily built CSR matrices and KD-tree
+    _cache: dict = field(default_factory=dict)  # lazily built CSR matrices
 
     @classmethod
     def from_graph_data(cls, data: GraphData) -> "RoutingGraph":
@@ -137,33 +124,3 @@ class RoutingGraph:
                 raise ValueError(f"node {target} is not reachable from {source}")
             path.append(node)
         return tuple(reversed(path))
-
-    # ------------------------------------------------------------------ snapping
-    def _m_per_deg(self) -> float:
-        return float(np.radians(1.0) * self.grid.radius_m)
-
-    def _tree(self):
-        if "tree" not in self._cache:
-            valid_nodes = np.flatnonzero(self.valid)
-            if valid_nodes.size == 0:
-                raise ValueError("graph has no valid nodes")
-            g = self.grid
-            scale = float(np.cos(np.radians((g.south + g.north) / 2)) * self._m_per_deg())
-            pts = np.column_stack([self.lon[valid_nodes] * scale, self.lat[valid_nodes] * self._m_per_deg()])
-            self._cache["tree"] = (cKDTree(pts), valid_nodes, scale)
-        return self._cache["tree"]
-
-    def snap(self, lon: float, lat: float, max_distance_m: float | None = None) -> SnapResult:
-        """Nearest *valid* node to (lon, lat). Raises SnapError outside the grid or beyond max_distance_m."""
-        grid = self.grid
-        if not bool(grid.contains(lon, lat)):
-            raise SnapError(f"({lon}, {lat}) is outside the graph area")
-        tree, valid_nodes, scale = self._tree()
-        _, idx = tree.query([lon * scale, lat * self._m_per_deg()])
-        node = int(valid_nodes[int(idx)])
-        n_lon, n_lat = float(self.lon[node]), float(self.lat[node])
-        mid = np.radians((lat + n_lat) / 2)
-        dist = grid.radius_m * float(np.hypot(np.radians(n_lat - lat), np.cos(mid) * np.radians(n_lon - lon)))
-        if max_distance_m is not None and dist > max_distance_m:
-            raise SnapError(f"nearest valid terrain is {dist:.0f} m away (limit {max_distance_m:.0f} m)")
-        return SnapResult(node=node, lon=n_lon, lat=n_lat, distance_m=dist)

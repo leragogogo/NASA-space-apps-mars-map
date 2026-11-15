@@ -27,7 +27,7 @@ def test_fixed_end_requires_end_and_other_modes_forbid_it():
     {"destinations": []},
     {"destinations": [{"lon": -69.8, "lat": -11.2}] * 26},
     {"start": {"lon": 250.0, "lat": 0.0}},
-    {"season": "Winter"},
+    {"season": "S. Winter (Ls 90-180)"},
     {"end_mode": "teleport"},
 ])
 def test_invalid_requests_rejected(patch):
@@ -38,7 +38,7 @@ def test_invalid_requests_rejected(patch):
 def test_time_limit_is_clamped_and_known_season_accepted():
     assert RouteRequest(**BASE, time_limit_s=999).time_limit_s == 30.0
     assert RouteRequest(**BASE, time_limit_s=0.01).time_limit_s == 1.0
-    assert RouteRequest(**BASE, season=SEASONS[1]).season == SEASONS[1]
+    assert RouteRequest(**BASE, season="winter").season == "winter"
 
 
 def test_response_roundtrip_uses_from_alias():

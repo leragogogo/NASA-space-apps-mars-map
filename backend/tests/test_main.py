@@ -4,7 +4,7 @@ def test_hello_still_works(client):
 
 def test_routers_are_wired(client):
     paths = set(client.get("/openapi.json").json()["paths"])
-    assert {"/api/get-layer-one", "/api/get-layer-two", "/api/get-layer-three", "/api/get-layer-four",
+    assert {"/api/get-layer-one", "/api/get-layer-two", "/api/get-layer-three", "/api/get-layer-four", "/api/route",
             "/api/tiles/{source}/{z}/{row}/{col}"} <= paths
 
 

@@ -16,7 +16,7 @@ import tifffile
 from fastapi.testclient import TestClient
 from PIL import Image
 
-FIXTURE_SLOPE_DEG = 10.0  # the fixture DEM is a plane rising to the east at this slope
+FIXTURE_SLOPE_DEG = 6.0  # the fixture DEM is a plane rising to the east at this slope (cells are ~27 km wide: keep it gentle)
 DEM_SHAPE = (6, 8)        # rows, cols
 SEASON_NAMES = {
     "autumn": "S. Autumn (Ls 0-90)",
@@ -130,7 +130,7 @@ def fixture_data(tmp_path_factory) -> Path:
 @pytest.fixture(scope="session")
 def fixture_settings(fixture_data):
     from app.core.config import Settings
-    return Settings(data_dir=fixture_data)
+    return Settings(data_dir=fixture_data, grid_coarsen=1)  # grid = the fixture DEM shape
 
 
 @pytest.fixture(scope="session")

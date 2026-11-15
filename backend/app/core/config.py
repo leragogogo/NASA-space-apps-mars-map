@@ -80,10 +80,22 @@ class Settings:
     def database_url(self) -> str:
         """MARS_DATABASE_URL, else a SQLite file in the (gitignored) data folder."""
         return os.environ.get("MARS_DATABASE_URL", f"sqlite:///{self.data_dir / 'app.db'}")
+    # Shared grid: the 200 m DEM divided by this factor. Display and routing share it. 1 = the native 200 m grid
+    # (1.29 M nodes, 10.3 M edges; routes in seconds with the NumPy/SciPy engine); 2 -> ~400 m, ~320k nodes.
+    grid_coarsen: int = 1
+    # Routing (SKILL.md section 10). Capacities are placeholders until confirmed by the product owner:
+    # {profile: {resource: capacity}}; empty = no budget warnings.
+    capacities: dict = field(default_factory=dict)
+    reserve_margin: float = 0.2
+    max_snap_distance_m: float = 1000.0
 
     @property
     def raw_dir(self) -> Path:
         return self.data_dir / "raw"
+
+    @property
+    def graph_file(self) -> Path:
+        return self.data_dir / "graph" / "graph.npz"
 
     @property
     def derived_dir(self) -> Path:
