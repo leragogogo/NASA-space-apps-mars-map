@@ -3,7 +3,7 @@ from fastapi.testclient import TestClient
 
 from app.core.config import Settings
 from main import create_app
-from tests.conftest import build_fixture_data
+from tests.conftest import AuthedTestClient, build_fixture_data, register_and_login
 from tests.routing.helpers import INF, both, make_graph_data
 
 # 0 - 1 - 2 - 3 on flat ground; 3 -> 4 is a cliff the car can climb but the astronaut cannot; 5 is isolated.
@@ -28,7 +28,7 @@ def data_dir(tmp_path_factory):
 
 
 def make_client(data_dir, **settings):
-    return TestClient(create_app(Settings(data_dir=data_dir, **settings)))
+    return AuthedTestClient(create_app(Settings(data_dir=data_dir, **settings)))
 
 
 @pytest.fixture(scope="module")
@@ -120,7 +120,7 @@ def test_exceeded_budget_adds_warning(data_dir):
 
 
 def test_missing_graph_is_503_but_layers_still_work(empty_client):
-    r = empty_client.post("/api/route", json=body())
+    r = empty_client.post("/api/route", json=body(), headers=register_and_login(empty_client))
     assert r.status_code == 503 and set(r.json()) == {"detail", "fix"}
     assert empty_client.get("/api/hello").status_code == 200
 
@@ -130,3 +130,23 @@ def test_unavailable_weather_gives_a_warning(tmp_path):
     with make_client(tmp_path) as c:
         d = c.post("/api/route", json=body(dests=(1,), season="winter")).json()
     assert d["warnings"] == ["Weather layer unavailable: dust-storm risk is unknown for this route."]
+
+
+def test_route_requires_login(data_dir):
+    with TestClient(create_app(Settings(data_dir=data_dir))) as anonymous:  # no token
+        assert anonymous.post("/api/route", json=body()).status_code == 401
+        bad = anonymous.post("/api/route", json=body(), headers={"Authorization": "Bearer not-a-token"})
+        assert bad.status_code == 401
+        assert anonymous.get("/api/get-layer-two").status_code in (200, 503)  # the layer endpoints stay public
+
+
+def test_a_graph_built_with_other_parameters_falls_back_to_the_reference_mass(client):
+    # the hand-built test graph is not from the real profile models, so a per-user recomputation would not be
+    # comparable with it: the response says so and reports no body mass for the astronaut
+    d = client.post("/api/route", json=body("astronaut", dests=(1,))).json()
+    assert d["body_mass_kg"] is None and any("reference astronaut mass" in w for w in d["warnings"])
+
+
+def test_the_car_never_uses_body_mass(client):
+    d = client.post("/api/route", json=body("car", dests=(1,))).json()
+    assert d["body_mass_kg"] is None and d["warnings"] == []

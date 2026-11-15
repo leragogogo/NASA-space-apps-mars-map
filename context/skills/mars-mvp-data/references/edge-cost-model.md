@@ -86,7 +86,7 @@ Notes:
 - Check whether Minetti's figure is a net or gross cost; if net, add a resting baseline to `o2_g` and `water_g`.
 - Mars gravity lowers the real cost, but the scaling is approximate; `gravity_factor` is a calibration knob, not physics.
 - Oxygen, CO2 removal and cooling water all scale with `E_met`, so they are nearly collinear; keep them separate because their capacities differ. The binding limit is whichever capacity is smallest relative to its use.
-- Who the astronaut is enters mainly through mass: Minetti gives energy per kg per metre, so `m_total` (body + suit + gear) scales it. Optional parameter `max_metabolic_rate_W` (a fraction of aerobic capacity) can cap speed on climbs so the energy rate stays sustainable. Height, age and sex are not modelled (no data to calibrate them).
+- Who the astronaut is enters mainly through mass: Minetti gives energy per kg per metre, so `m_total` (body + suit + gear) scales it. **Mass cancels in the route cost** (`e(i)/e_flat` has it in both parts), so every astronaut gets the same route; it only scales `o2_g`, `co2_g` and `water_g`. Those three are therefore recomputed per request for the requesting user's body mass, over the edges of the returned path (`AstronautModel.resources(geom, body_mass_kg)`, shared with the graph builder, which uses the reference `body_mass_kg`); the stored graph columns are the reference-mass values. Optional parameter `max_metabolic_rate_W` (a fraction of aerobic capacity) can cap speed on climbs so the energy rate stays sustainable. Height, age and sex are not modelled (no data to calibrate them).
 - Minetti's coefficients come from healthy adults on Earth without suits, so results are good for comparing routes, not for medical prediction. In reduced gravity, carried load costs closer to weight (mass x 3.71) than mass, while inertia stays tied to mass; the scaling is approximate. If suit mass dominates, the Pandolf load-carriage equation is an alternative to scaling Minetti linearly.
 - A pulse oximeter does not measure consumption (SpO2 is not supply). Heart rate could later calibrate `efficiency_factor`. Out of MVP scope.
 
@@ -113,11 +113,20 @@ o2_g, co2_g, water_g = crew_n * rate * t                              (time-driv
 - Compare totals with capacities from config (`o2_g`, `co2_g`, `water_g`, `energy_wh`, `time_s`) and add a warning per exceeded budget, with a reserve margin (config, e.g. 20 %). MVP does not enforce budgets inside the search.
 - Future (not MVP): walk-back feasibility. Run Dijkstra backwards from the habitat to get a per-node return cost for each resource, then keep a node only if `outbound + return <= capacity * (1 - reserve)`. A car trip must also stay within walking range of the habitat using the astronaut resources. Needs a habitat location in the request or config.
 
-## 8. Config schema (names only)
+## 8. Configuration
 
-Implemented for now as frozen dataclasses with placeholder defaults in `app/routing/profiles/params.py` (`AstronautParams`, `CarParams`), each unconfirmed value marked `TODO`. `formula_version` carries a hash of the parameters, so editing a number marks saved graphs stale. They move under `app/core/config` once the config module exists.
+Everything below lives in **`config/mars.yaml`** (override the file with `MARS_CONFIG` for the API or `--config` for `python -m app.graph`). It is read by `app/core/configfile/` into `Settings` and validated at startup; a typo, a wrong type or an inconsistent value stops the program with a message naming the key.
 
-Under `app/core/config`: `profiles.<profile>.{hard_limit_deg, alpha, beta, p, ...params above}`, `capacities.<profile>.{o2_g, co2_g, water_g, energy_wh, time_s}`, `reserve_margin`, `formula_version`.
+| Section | What it holds |
+|---|---|
+| `profiles.<astronaut\|car>` | every model parameter: `hard_limit_deg`, `alpha`, `beta`, `p` and the parameters of sections 5 and 6 (names match `AstronautParams` / `CarParams`). A parameter that is not listed keeps the default in `app/routing/profiles/params.py`. |
+| `capacities.<profile>` | budgets the vehicle or suit carries, per resource (`time_s`, `o2_g`, `co2_g`, `water_g`, `energy_wh`); empty = no budget warnings |
+| `routing` | `reserve_margin` (share of each budget kept in reserve), `max_snap_distance_m` |
+| `slope_classes` | classes of the map overlay (display only); the loader checks that the steepest walkable class ends at the astronaut `hard_limit_deg` and the steepest drivable class at the car limit |
+| `grid`, `poi` | `grid.coarsen` (1 = native 200 m), `poi.sample_radius_km` |
+| `confirmation` | per section `status: placeholder\|confirmed` and a `source`; a confirmed section must name its source, and the API logs the unconfirmed sections at startup |
+
+Changing a profile parameter changes the graph's `formula_version`, so the saved graph is stale: rebuild it with `python -m app.graph`. Until then the API keeps the reference-mass numbers and warns (section 5, body mass).
 
 ## 9. Tests
 

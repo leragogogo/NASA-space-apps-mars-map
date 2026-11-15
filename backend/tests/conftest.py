@@ -156,3 +156,26 @@ def db_session(tmp_path):
     with init_db(engine)() as session:
         yield session
     engine.dispose()
+
+
+def register_and_login(client, email: str = "astro@example.com", body_mass_kg: float = 80.0,
+                       password: str = "correct-horse") -> dict:
+    """Create a user through the API and return its Authorization header (reuses the account if it exists)."""
+    r = client.post("/api/auth/register", json={"email": email, "password": password,
+                                                "body_mass_kg": body_mass_kg, "birth_year": 1990})
+    assert r.status_code in (201, 409), r.text
+    r = client.post("/api/auth/login", data={"username": email, "password": password})
+    assert r.status_code == 200, r.text
+    return {"Authorization": f"Bearer {r.json()['access_token']}"}
+
+
+class AuthedTestClient(TestClient):
+    """A TestClient that registers a default user (80 kg) and sends its token once the app has started.
+
+    Use `anonymous()`-style access by building a plain TestClient instead when a test needs no token.
+    """
+
+    def __enter__(self):
+        super().__enter__()
+        self.headers.update(register_and_login(self))
+        return self

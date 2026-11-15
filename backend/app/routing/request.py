@@ -10,12 +10,16 @@ from typing import Callable
 from app.core.resources import ProfileId
 from app.graph.loader import RoutingContext
 from app.routing.contracts import RouteLimits, RoutePlan, RouteQuery
+from app.routing.profiles.personalize import (graph_matches_models, path_resources_for_mass, reference_models,
+                                             supports_body_mass)
 from app.routing.service import plan_route
 from app.routing.snap import SnappedNode, snap
 from app.schemas.route import (DroppedStopOut, LegOut, LonLat, RouteRequest, RouteResponse, SnappedPoint,
                                SnappedPoints)
 
 WEATHER_UNAVAILABLE = "Weather layer unavailable: dust-storm risk is unknown for this route."
+MASS_UNAVAILABLE = ("Oxygen, CO2 and water use are estimated for the reference astronaut mass: the routing graph was "
+                    "built with other profile parameters than the current ones (rebuild it with `python -m app.graph`).")
 
 
 class RouteRequestError(ValueError):
@@ -49,7 +53,20 @@ def weather_warnings(weather, season: str | None, points: list[tuple[float, floa
     return out
 
 
-def handle_route_request(ctx: RoutingContext, req: RouteRequest, settings, weather=None) -> RouteResponse:
+def mass_resources(ctx: RoutingContext, profile: ProfileId, body_mass_kg: float | None, settings):
+    """(path_resources callable | None, mass used | None, warning | None) for the requesting user's body mass."""
+    if body_mass_kg is None or not supports_body_mass(profile):
+        return None, None, None
+    models = reference_models(settings)
+    if not graph_matches_models(ctx.formula_version, models):
+        return None, None, MASS_UNAVAILABLE
+    model = models[profile]
+    return (lambda _profile, nodes: path_resources_for_mass(ctx.graph, model, nodes, body_mass_kg),
+            float(body_mass_kg), None)
+
+
+def handle_route_request(ctx: RoutingContext, req: RouteRequest, settings, weather=None,
+                         body_mass_kg: float | None = None) -> RouteResponse:
     limit = settings.max_snap_distance_m
     start = snap(ctx, req.start.lon, req.start.lat, "start", limit)
     dests = [snap(ctx, d.lon, d.lat, f"destination {i}", limit) for i, d in enumerate(req.destinations)]
@@ -69,17 +86,19 @@ def handle_route_request(ctx: RoutingContext, req: RouteRequest, settings, weath
     query = RouteQuery(profile=ProfileId(req.profile), start_node=start.node,
                        destination_nodes=tuple(s.node for s in dests), end_mode=req.end_mode,
                        end_node=end.node if end else None, time_limit_s=req.time_limit_s, season=req.season)
+    resources_of, mass_used, mass_warning = mass_resources(ctx, query.profile, body_mass_kg, settings)
     plan = plan_route(ctx.graph, query, (settings.capacities or {}).get(ProfileId(req.profile).value),
-                      settings.reserve_margin)
+                      settings.reserve_margin, resources_of)
     visited = [(start.lon, start.lat), *((dests[i].lon, dests[i].lat) for i in plan.stop_order)]
     if end:
         visited.append((end.lon, end.lat))
-    warnings = [*plan.warnings, *weather_warnings(weather, req.season, visited)]
-    return to_response(ctx, plan, req, start, dests, end, warnings)
+    warnings = [*plan.warnings, *weather_warnings(weather, req.season, visited), *([mass_warning] if mass_warning else [])]
+    return to_response(ctx, plan, req, start, dests, end, warnings, mass_used)
 
 
 def to_response(ctx: RoutingContext, plan: RoutePlan, req: RouteRequest, start: SnappedNode,
-                dests: list[SnappedNode], end: SnappedNode | None, warnings: list[str]) -> RouteResponse:
+                dests: list[SnappedNode], end: SnappedNode | None, warnings: list[str],
+                body_mass_kg: float | None = None) -> RouteResponse:
     n = len(dests)
     return RouteResponse(
         profile=plan.profile,
@@ -95,4 +114,5 @@ def to_response(ctx: RoutingContext, plan: RoutePlan, req: RouteRequest, start: 
         snapped=SnappedPoints(start=_snapped(start), destinations=[_snapped(s) for s in dests],
                               end=_snapped(end) if end else None),
         warnings=warnings,
+        body_mass_kg=body_mass_kg,
     )

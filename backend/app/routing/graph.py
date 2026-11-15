@@ -33,6 +33,7 @@ class RoutingGraph:
     lon: np.ndarray  # per node id
     lat: np.ndarray
     valid: np.ndarray  # per node id: has elevation data
+    elev: np.ndarray  # per node id: elevation in m (NaN where there is no data)
     _edge_keys: np.ndarray  # sorted src * n_nodes + dst
     _edge_order: np.ndarray  # edge id of each sorted key
     _cache: dict = field(default_factory=dict)  # lazily built CSR matrices
@@ -52,6 +53,7 @@ class RoutingGraph:
             cost={p: np.asarray(data.cost(p), dtype=np.float64) for p in PROFILES},
             resources={p: {r: data.array(p, r) for r in RESOURCES} for p in PROFILES},
             lon=np.asarray(data.node["lon"]), lat=np.asarray(data.node["lat"]), valid=valid,
+            elev=np.asarray(data.node["elev_m"]),
             _edge_keys=sorted_keys, _edge_order=order.astype(np.int32))
 
     # ------------------------------------------------------------------ size

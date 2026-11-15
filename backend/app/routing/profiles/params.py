@@ -1,8 +1,9 @@
 """Parameters of the two profile models.
 
 Every number here is a PLACEHOLDER, not a real suit or rover specification (edge-cost-model.md sections 5-6).
-They are plain defaults until the config module exists ("we will worry about the config later on"); then
-they move under `app/core/config` as `profiles.<profile>.*` without changing the formulas.
+These are the built-in fallbacks. The values actually used come from `config/mars.yaml` (`profiles.<profile>`),
+loaded by `app.core.configfile.load_settings` and turned into models by `models_from_settings`; a parameter the
+file does not list keeps the default below.
 """
 from __future__ import annotations
 

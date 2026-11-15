@@ -10,13 +10,16 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import yaml
 from fastapi.testclient import TestClient
 
 from app.core.config import Settings
+from app.core.configfile import DEFAULT_CONFIG_PATH, load_settings
 from app.core.resources import PROFILES, RESOURCES
 from app.graph.cli import main as graph_cli
 from app.graph.contracts import GraphData
 from main import create_app
+from tests.conftest import AuthedTestClient, register_and_login
 from tests.integration.helpers import make_gentle_data, node_point
 
 REAL_DATA = Path(__file__).resolve().parents[3] / "data"
@@ -37,8 +40,9 @@ def real_body(profile="astronaut", **extra) -> dict:
             "season": "winter", "time_limit_s": 1, **extra}
 
 
-def client_for(data_dir, **settings) -> TestClient:
-    return TestClient(create_app(Settings(data_dir=data_dir, jwt_secret_key=SECRET, **settings)))
+def client_for(data_dir, config=None, **settings) -> AuthedTestClient:
+    """An app configured like production: from the YAML file (the same one the graph was built with)."""
+    return AuthedTestClient(create_app(load_settings(config, data_dir=data_dir, jwt_secret_key=SECRET, **settings)))
 
 
 # ----------------------------------------------------------------------------------- synthetic
@@ -90,6 +94,47 @@ def test_route_response_is_consistent(client, profile):
         assert j["resources"][res] == pytest.approx(sum(leg["resources"][res] for leg in j["legs"]), rel=1e-6)
     assert j["resources"]["time_s"] > 0 and all(p["distance_m"] <= 1000 for p in
                                                 [start, *j["snapped"]["destinations"]])
+    # the default test user weighs 80 kg: the astronaut estimate uses it, the car does not depend on mass
+    assert j["body_mass_kg"] == (80.0 if profile == "astronaut" else None)
+    assert not any("reference astronaut mass" in w for w in j["warnings"])  # graph and models are in sync
+
+
+def test_route_requires_login(built):
+    with TestClient(create_app(Settings(data_dir=built, jwt_secret_key=SECRET))) as anonymous:
+        assert anonymous.post("/api/route", json=route_body()).status_code == 401
+
+
+def test_body_mass_changes_the_estimates_but_never_the_route(client):
+    """Mass comes from the database row of whoever sends the token."""
+    light = register_and_login(client, "light@example.com", body_mass_kg=55.0)
+    heavy = register_and_login(client, "heavy@example.com", body_mass_kg=110.0)
+    a = client.post("/api/route", json=route_body(), headers=light).json()
+    b = client.post("/api/route", json=route_body(), headers=heavy).json()
+    assert (a["body_mass_kg"], b["body_mass_kg"]) == (55.0, 110.0)
+    assert a["path"] == b["path"] and a["stop_order"] == b["stop_order"]  # the same route for everyone
+    assert a["total_weight"] == b["total_weight"] and a["legs"][0]["weight"] == b["legs"][0]["weight"]
+    for res in ("o2_g", "co2_g", "water_g"):
+        assert b["resources"][res] > a["resources"][res]
+    for res in ("time_s", "energy_wh"):
+        assert b["resources"][res] == pytest.approx(a["resources"][res])
+    for leg_a, leg_b in zip(a["legs"], b["legs"]):  # per-leg numbers are personalised too
+        assert leg_b["resources"]["o2_g"] > leg_a["resources"]["o2_g"]
+
+
+def test_a_changed_profile_is_used_on_the_next_request(client):
+    headers = register_and_login(client, "changing@example.com", body_mass_kg=60.0)
+    before = client.post("/api/route", json=route_body(), headers=headers).json()
+    assert client.patch("/api/users/me", json={"body_mass_kg": 100.0}, headers=headers).status_code == 200
+    after = client.post("/api/route", json=route_body(), headers=headers).json()  # same token, new database value
+    assert (before["body_mass_kg"], after["body_mass_kg"]) == (60.0, 100.0)
+    assert after["resources"]["o2_g"] > before["resources"]["o2_g"] and after["path"] == before["path"]
+
+
+def test_the_car_does_not_use_body_mass(client):
+    headers = register_and_login(client, "driver@example.com", body_mass_kg=120.0)
+    a = client.post("/api/route", json=route_body("car"), headers=headers).json()
+    b = client.post("/api/route", json=route_body("car")).json()  # the default 80 kg user
+    assert a["body_mass_kg"] is None and a["resources"] == b["resources"]
 
 
 def test_the_car_is_faster_than_the_astronaut_over_the_same_trip(client):
@@ -143,6 +188,56 @@ def test_bad_requests_are_rejected_clearly(client):
     r = client.post("/api/route", json=far)  # inside the area but farther than 1 km from any node
     assert r.status_code == 422 and "maximum 1000 m" in r.json()["detail"]
     assert client.post("/api/route", json={**route_body(), "profile": "tank"}).status_code == 422
+
+
+# ----------------------------------------------------------------------------------- configuration
+def custom_config(tmp_path, **astronaut) -> Path:
+    doc = yaml.safe_load(DEFAULT_CONFIG_PATH.read_text())
+    doc["profiles"]["astronaut"].update(astronaut)
+    doc["capacities"] = {"astronaut": {"o2_g": 1.0}}
+    path = tmp_path / "custom.yaml"
+    path.write_text(yaml.safe_dump(doc, sort_keys=False))
+    return path
+
+
+def test_the_configuration_file_drives_the_graph_and_the_api(tmp_path, capsys):
+    root = make_gentle_data(tmp_path / "data")
+    config = custom_config(tmp_path, suit_mass_kg=65.0)
+    assert graph_cli(["--data-dir", str(root), "--config", str(config)]) == 0  # graph built with the file's numbers
+    with client_for(root, config) as c:
+        j = c.post("/api/route", json=route_body()).json()
+        assert j["body_mass_kg"] == 80.0 and not any("reference astronaut mass" in w for w in j["warnings"])
+        assert any("o2_g" in w and "exceeds the budget" in w for w in j["warnings"])  # capacities come from the file
+    with client_for(root) as c:  # the app runs with the default file: the graph is stale for it
+        j = c.post("/api/route", json=route_body()).json()
+        assert j["body_mass_kg"] is None and any("reference astronaut mass" in w for w in j["warnings"])
+    assert graph_cli(["--data-dir", str(root), "--config", str(config)]) == 0
+    assert "up to date" in capsys.readouterr().out.splitlines()[-1]  # same file again: reused
+    assert graph_cli(["--data-dir", str(root)]) == 0  # the default file has other parameters: rebuilt
+    assert "built:" in capsys.readouterr().out.splitlines()[-1]
+
+
+def test_changing_a_profile_parameter_changes_the_resource_estimates_not_the_route(tmp_path):
+    base_root, heavy_root = make_gentle_data(tmp_path / "a"), make_gentle_data(tmp_path / "b")
+    default, heavy = custom_config(tmp_path), None
+    heavy = tmp_path / "heavy.yaml"
+    doc = yaml.safe_load(default.read_text())
+    doc["profiles"]["astronaut"]["suit_mass_kg"] = 120.0
+    heavy.write_text(yaml.safe_dump(doc, sort_keys=False))
+    assert graph_cli(["--data-dir", str(base_root), "--config", str(default)]) == 0
+    assert graph_cli(["--data-dir", str(heavy_root), "--config", str(heavy)]) == 0
+    with client_for(base_root, default) as a, client_for(heavy_root, heavy) as b:
+        ra, rb = (c.post("/api/route", json=route_body()).json() for c in (a, b))
+    assert ra["path"] == rb["path"] and ra["total_weight"] == pytest.approx(rb["total_weight"])  # same route
+    assert rb["resources"]["o2_g"] > ra["resources"]["o2_g"]  # a heavier suit burns more oxygen
+
+
+def test_an_invalid_configuration_stops_the_graph_build_with_a_clear_message(tmp_path, capsys):
+    bad = tmp_path / "bad.yaml"
+    bad.write_text("profiles:\n  astronaut:\n    suit_mas_kg: 5\n")
+    assert graph_cli(["--data-dir", str(tmp_path), "--config", str(bad)]) == 2
+    err = capsys.readouterr().err
+    assert "invalid configuration" in err and "suit_mas_kg" in err
 
 
 # ----------------------------------------------------------------------------------- real data

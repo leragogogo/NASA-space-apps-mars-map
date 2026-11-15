@@ -22,6 +22,10 @@ class SlopeClass:
     vehicle: bool
 
 
+STATUS_PLACEHOLDER = "placeholder"
+STATUS_CONFIRMED = "confirmed"
+
+# Built-in defaults, used only when no configuration file is loaded (config/mars.yaml is the source of truth).
 # Thresholds are unconfirmed by the product owner (SKILL.md section 5): keep them configurable.
 SLOPE_CLASSES = (
     SlopeClass("easy_walk", "Easy walk", 0, 5, "#1a9850", True, True),
@@ -88,6 +92,11 @@ class Settings:
     capacities: dict = field(default_factory=dict)
     reserve_margin: float = 0.2
     max_snap_distance_m: float = 1000.0
+    # Per-profile model parameters from the configuration file ({profile: {parameter: value}}); parameters that are
+    # not listed keep the defaults of app/routing/profiles/params.py.
+    profiles: dict = field(default_factory=dict)
+    # Configuration sections the product owner has not signed off yet (see config/mars.yaml, `confirmation`).
+    unconfirmed: tuple = ()
 
     @property
     def raw_dir(self) -> Path:

@@ -62,7 +62,7 @@ An interactive Mars map for **astronauts and mission planners**, built from stac
 | Hi-res visual | MRO CTX East Melas Hillshade / DEM | `CTX_Shade_East_Melas`, `CTX_DEM_East_Melas` (WMTS) | ~20 m/px, strips only (~45–85 %). **The DEM tiles are greyscale pictures, not values** |
 | Hi-res slope picture | CTX Color Slope tiles | `CTX_ClrSlope_8bit_*` (e.g. `..._12S290E_24mp_D18_034250_1676_D21_035450_1674`) | Narrow strips |
 
-- Slope classes used so far (**unconfirmed by product owner, keep configurable**): 0–5° easy walk · 5–15° walkable · 15–25° vehicle only · 25–35° hard / vehicle limit · >35° impassable.
+- Slope classes used so far (**unconfirmed by product owner, keep configurable**): 0–5° easy walk · 5–15° walkable · 15–25° vehicle only · 25–35° hard / vehicle limit · >35° impassable. They now live in `config/mars.yaml` (`slope_classes`, with the profile limits and budgets); see `references/edge-cost-model.md` section 8.
 - **Limitation:** the 24 m CTX DEM and Slope products (e.g. `CTX_DEM_12S290E_...`) appear in the Trek catalogue but have **no WMTS or value service**. For sharper slopes, get the source DTMs from PDS / USGS Astrogeology.
 - Shelter candidates (pits, skylights) are not a Trek layer. Derive local depressions from the DEM, or mark this as future work.
 
@@ -404,7 +404,8 @@ Request:
     "resources": {"time_s": 5400, "o2_g": 910, "co2_g": 1050, "water_g": 1800, "energy_wh": 52},   // totals; each leg has the same keys
     "dropped": [{"index": 2, "point": {...}, "reason": "unreachable_for_profile"}],
     "snapped": {"start": {...,"distance_m": 140}, "destinations": [...], "end": null},
-    "warnings": []                         // e.g. the weather `message` for `season`, verbatim (section 6)
+    "warnings": [],                        // e.g. the weather `message` for `season`, verbatim (section 6)
+    "body_mass_kg": 72.0                   // the user's mass behind the o2/co2/water estimates (astronaut); null for the car
   }
   ```
 - A dropped stop is a normal result, not an error; the UI must list it with its reason. A drop does mean the rest of the route is incomplete for that profile, so show it clearly (data-sufficiency spirit, section 2).
@@ -427,7 +428,7 @@ Notes for package H (API):
 ### Implementation (package H, API controller, done)
 | File | Role |
 |---|---|
-| `app/api/routes/route.py` | `POST /api/route`: thin controller; 503 if the graph is unavailable, 422 for `SnapError`, `RouteRequestError`, `NoFeasibleRoute` |
+| `app/api/routes/route.py` | `POST /api/route`: thin controller; login required (401), 503 if the graph is unavailable, 422 for `SnapError`, `RouteRequestError`, `NoFeasibleRoute`; passes the user's body mass to `handle_route_request` |
 | `app/routing/request.py` | `handle_route_request`: snap, duplicate check (names the points, e.g. `destination 0 = destination 1`), `plan_route`, `RoutePlan` -> `RouteResponse`; weather `message` of every visited point's cell goes verbatim into `warnings` (only when `season` is given; "unknown" warnings if the cell or the layer is missing) |
 | `app/routing/snap.py` | `snap`: nearest valid node, rejects points outside the grid bbox or farther than `Settings.max_snap_distance_m` (1000 m) |
 | `app/graph/loader.py` | `load_routing_context(settings)`: `data/graph/graph.npz` -> `RoutingContext` (RoutingGraph + KD-tree over valid nodes); called in the FastAPI lifespan, stored in `app.state.routing` (a `LayerUnavailable` if the file is missing, so only `/api/route` answers 503) |
@@ -447,10 +448,10 @@ Use tiny hand-built graphs:
 
 ## 10a. Authentication (JWT + SQLite)
 - **Endpoints:** `POST /api/auth/register` (JSON: `email`, `password` (no length check), `body_mass_kg` 30-250, `birth_year` from 1900 to the current year (no age rule); 201 + user, 409 if the email is taken), `POST /api/auth/login` (OAuth2 password **form**: the email goes in `username`; returns `{access_token, token_type: "bearer"}`; 401 with the same message for an unknown email and a wrong password), `GET /api/users/me` and `PATCH /api/users/me` (Bearer token; PATCH changes only the fields sent).
-- **Protected endpoints:** only `/api/users/me` for now; `POST /api/route` should take `Depends(get_current_user)` once it exists. Layer and tile endpoints stay public.
+- **Protected endpoints:** `/api/users/me` and `POST /api/route` (`Depends(get_current_user)`: 401 without a valid token). Layer and tile endpoints stay public.
 - **Code:** `app/db/{models,session}.py` (SQLAlchemy 2.x, `User` table, one engine per app on `app.state`, tables created in the lifespan, no migrations yet), `app/auth/{security,service,dependencies}.py` (Argon2 via pwdlib, HS256 tokens via PyJWT with `sub` = user id and `exp`, `get_current_user`), `app/schemas/auth.py`, `app/api/routes/{auth,users}.py`.
 - **Config:** `JWT_SECRET_KEY` is required (the app refuses to start without it; `backend/.env.example`). Database: `MARS_DATABASE_URL`, default `sqlite:///<data_dir>/app.db` (gitignored with `data/`). Token lifetime 60 min (`Settings.access_token_expire_minutes`). No refresh tokens, logout, password reset or rate limiting yet.
-- **Body mass and birth year are stored, not yet used by the router.** `references/edge-cost-model.md` has `body_mass_kg` for the astronaut profile, but edge costs are computed per profile at graph build time, so using each user's mass is a separate change. Age is not modelled (no data to calibrate it).
+- **Body mass is used for the astronaut's resource estimates, never for the route.** Body mass cancels in the cost formula, so the path and `total_weight` are the same for everyone. `POST /api/route` loads the requesting user's row (token -> user id -> database) and recomputes oxygen, CO2 and water over the returned path's edges only (`app/routing/profiles/personalize.py`, which calls the same `AstronautModel.resources` the graph builder uses); time and suit energy do not depend on mass. The response reports `body_mass_kg` (null for the car, or when the reference mass was used). If the saved graph was built with other profile parameters than the current models, the reference-mass numbers are kept and a warning says to rebuild with `python -m app.graph`. Birth year is stored but not modelled (no data to calibrate age).
 
 ## 11. Development rules (all agents)
 These apply to every agent and every change.
@@ -476,7 +477,7 @@ Read this if you work on the frontend or the graph builder. Details live in `ref
 - POI ids are now `<service>:<layer>:<id>`, e.g. `EZMars:3:0` (was `EZMars__3:0`). POI features also carry `kind` (graph-side enum) next to `category` (the API filter).
 - Layer 1 sources have an extra field `role` (`primary | fallback | zoom-in detail`).
 - Endpoint paths are the implemented ones (`/api/get-layer-one` ... `four`, `/api/tiles/...`), listed in `layer-ingestion.md` section 6.
-- `POST /api/route` answers 503 (`detail` + `fix`) until `data/graph/graph.npz` exists; 422 for points outside the graph, farther than `max_snap_distance_m` (1000 m) from a node, snapped to the same node, or an unreachable fixed end. Dropped stops are a normal 200 result.
+- `POST /api/route` answers 401 without a valid token, 503 (`detail` + `fix`) until `data/graph/graph.npz` exists; 422 for points outside the graph, farther than `max_snap_distance_m` (1000 m) from a node, snapped to the same node, or an unreachable fixed end. Dropped stops are a normal 200 result.
 
 **Layer structure (graph builder)**
 - Every layer has `ingest.py` (raw files -> contract data on the shared grid, validated) and `service.py` (client format; the classes are still called `...Getter`). `app/layers/inputs/load.py: load_all(settings, grid=None)` returns `GraphInputs` and raises `LayerDataError` when data is missing. The graph builder must use only that.

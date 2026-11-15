@@ -72,3 +72,6 @@ class RouteResponse(BaseModel):
     dropped: list[DroppedStopOut] = []
     snapped: SnappedPoints
     warnings: list[str] = []
+    # Body mass (kg) of the requesting user that the o2/co2/water estimates were computed for; null when the
+    # profile does not depend on it (car) or the reference mass was used.
+    body_mass_kg: float | None = None
