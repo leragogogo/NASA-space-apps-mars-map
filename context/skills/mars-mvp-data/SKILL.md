@@ -462,7 +462,7 @@ These apply to every agent and every change.
    - Scripts: `scripts/<module>/`.
 2. **Every piece of new code ships with tests, in the same change.**
    - Backend: pytest. Tests mirror the module path: code in `backend/app/<module>/<file>.py` is tested in `backend/tests/<module>/test_<file>.py`. Create `backend/tests/<module>/` (with an `__init__.py`, so equal file names in different modules don't clash) if it does not exist. Run `cd backend && pytest`. If `pytest` is not in `backend/requirements.txt` yet, add it.
-   - Frontend: Vitest (+ React Testing Library, jsdom), with the test next to the source as `<Name>.test.jsx`. None is installed yet: the first agent that adds a frontend test also adds the dev dependencies and a `"test": "vitest run"` script in `frontend/package.json`.
+   - Frontend: Vitest (+ React Testing Library, jsdom), with the test next to the source as `<Name>.test.jsx`. Installed; run with `cd frontend && npm test`. In tests `react-leaflet` is aliased to `src/test/reactLeafletMock.jsx` (Leaflet cannot draw vectors in jsdom).
    - Scripts: tests in `scripts/<module>/tests/`.
 3. **Tests are offline and deterministic.** No network (the project reads static local files only). Use the synthetic fixtures (`app/layers/fakes.py`) and tiny hand-built graphs and arrays. A test that needs the real downloaded data must skip itself when `data/raw/` is missing (`pytest.mark.skipif`), so a fresh clone still passes.
 4. **Cover the edge cases named in this skill:** unreachable and isolated stops, `inf` weights, uphill versus downhill asymmetry, missing-data confidence labels, longitude wrap (0-360 versus -180..180), nodata cells.

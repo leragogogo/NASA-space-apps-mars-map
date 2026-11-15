@@ -40,7 +40,10 @@ npm install
 npm run dev
 ```
 
-App: http://localhost:5173 — requests to `/api/*` are proxied to the backend.
+App: http://localhost:5173 — requests to `/api/*` are proxied to the backend (`MARS_API_URL=http://localhost:8001 npm run dev`
+to use another backend port).
+
+Tests and lint: `npm test`, `npm run lint`. Details: `frontend/README.md`.
 
 ## Data
 
